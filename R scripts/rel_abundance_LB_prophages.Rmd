@@ -1,0 +1,845 @@
+---
+title: "Untitled"
+author: "Anshul Sinha"
+date: '2023-10-02'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+```{r}
+
+samtools <- read_tsv("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_list_analyses/samtools/concatenated_samtools.tsv")
+colnames(samtools) <- c("contig_name_filename", "startpos", "endpos", "numreads", "covbases", "coverage",  "meandepth", "meanbaseq", "meanmapq")
+
+
+
+# Split column by comma
+df_split <- strsplit(samtools$contig_name_filename, ":")
+
+# Create new columns for each split part
+samtools$filename <- sapply(df_split, "[[", 1)
+samtools$contigname <- sapply(df_split, "[[", 2)
+
+
+
+#remove unecessary part of filename with "sam_tools_cov"
+samtools$filename <- sub("^(([^_]*_){2}[^_]*)_.*", "\\1", samtools$filename)
+samtools
+
+
+
+
+
+
+
+
+# Define the names of the prophages that will be changed to "0" reads : Montmirail, Villandry, Maintenon, Chantilly, CP065315.1_Flavonifractor_plautii_strain_YL31_chromosome_fragment_37
+
+
+
+#prophages_to_change <- c("CP065321.1_Acutalibacter_muris_strain_KB18_chromosome_fragment_51", "CP065314.1_Enterocloster_clostridioformis_strain_YL32_chromosome_fragment_20", "CP065314.1_Enterocloster_clostridioformis_strain_YL32_chromosome_fragment_21", "CP065314.1_Enterocloster_clostridioformis_strain_YL32_chromosome_fragment_24", "ON453901.1_E_Clostridium_phage_Saumur__complete_genome", "CP065314.1_Enterocloster_clostridioformis_strain_YL32_chromosome_fragment_44", "CP065314.1_Enterocloster_clostridioformis_strain_YL32_chromosome_fragment_74", "CP065317.1_Enterococcus_faecalis_strain_KB1_chromosome_fragment_40", "CP065312.1_Blautia_pseudococcoides_strain_YL58_chromosome_fragment_25","CP065312.1_Blautia_pseudococcoides_strain_YL58_chromosome_fragment_53", "CP065315.1_Flavonifractor_plautii_strain_YL31_chromosome_fragment_9", "CP065315.1_Flavonifractor_plautii_strain_YL31_chromosome_fragment_20", "ON453905.1_Flavonifractor_phage_Cormatin__complete_genome", "ON453894.1_Akkermansia_phage_Chambord__partial_genome", "ON453896.1_Akkermansia_phage_Moulinsart__complete_genome", "CP065313.1_Turicimonas_muris_strain_YL45_chromosome_fragment_14",  "CP065318.1_Limosilactobacillus_reuteri_strain_I49_chromosome_fragment_1", "ON453897.1_Bacteroides_phage_Versailles__complete_genome", "CP065320.1_Clostridium_innocuum_strain_I46_chromosome_fragment_71", "ON453899.1_Clostridium_phage_Amboise__complete_genome","ON453893.1_Acutalibacter_phage_Fontainebleau__complete_genome", "ON453903.1_Flavonifractor_phage_Castelnaud__complete_genome", "ON453904.1_Flavonifractor_phage_Chenonceau__complete_genome")
+
+#remove leading spaces 
+samtools$contigname <- trimws(samtools$contigname, "left")
+
+
+
+
+
+
+
+#samtools$contigname %in% prophages_to_change
+# Use dplyr to update the values
+#samtools2 <- samtools %>%
+ # mutate(numreads = ifelse(samtools$filename %in% samples_to_change & samtools$contigname %in% prophages_to_change, 0, numreads))
+
+
+#samtools$contigname %in% prophages_to_change
+# Use dplyr to update the values
+#samtools2 <- samtools %>%
+ # mutate(meandepth = ifelse(samtools$filename %in% samples_to_change & samtools$contigname %in% prophages_to_change, 0, meandepth))
+
+
+
+
+```
+
+
+
+```{r}
+bug_df   = read_tsv("https://raw.githubusercontent.com/andrewGhazi/physalia/main/data/bugs.tsv")
+
+```
+
+```{r}
+#read in metadata 
+
+virome_metadata <- read.csv("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /virome_metadata.csv", header = TRUE)
+
+
+#to help name prophages properly 
+
+prophage_mapper <- read.csv("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /prophage_mapper.csv")
+```
+
+```{r}
+
+```
+
+
+
+
+```{r}
+#I want to calculate the % rel abundance 
+#step1 - calculate the mean depth sum for each sample 
+
+ df_relab1 <- samtools %>%
+    group_by(filename) %>%
+    summarise(sum_depth = sum(meandepth), contig_name_filename, meandepth, numreads, contigname)
+
+
+df_relab1$relab <- df_relab1$meandepth/df_relab1$sum_depth
+
+df_relab <- left_join(virome_metadata, df_relab1, by = "filename")
+df_relab <- left_join(df_relab, prophage_mapper, by = "contigname")
+
+
+# Create a custom color palette with 6 shades
+custom_palette <- c("#1f78b4", "#33a02c", "#e31a1c", "#ff7f00", "#6a3d9a", "#b15928", "#a6cee3", "#b2df8a", "#fb9a99", "#fdbf6f", "#cab2d6", "#ffff99", "#636363")
+
+# Add a new column to your dataframe to specify the fill color for each name
+df_relab$fill_color <- factor(df_relab$Name, levels = unique(df_relab$Name))
+
+
+ #Grouping dataframe by treatment and family and summing relative abundances within each subgroup 
+plot_df <- ggplot(df_relab , aes(fill= interaction(Host, fill_color), y= df_relab$meandepth, x=factor(df_relab$filename))) +
+labs(x="Sample") + labs(y="Relative abundance") + labs(fill="family") + 
+geom_bar(position = "fill",stat ="identity")  +
+theme(axis.text.x=element_text(angle=90,hjust=1)) +
+    scale_fill_manual(values = custom_palette) 
+
+
+plot_df + theme_classic() +
+  theme(text=element_text(family="Arial", face="bold", size=15)) + theme(axis.text.x = element_text(size = 3)) + 
+  
+  theme(legend.text = element_text(size = 2),
+        legend.title = element_text(size = 2)) +
+ # facet_wrap(~Treatment + Day, scales = "free")+ theme(strip.text = element_text(size = 3))
+
+
+write.csv(df_relab, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_list_analyses/samtools/relab.csv")
+
+```
+
+```{r}
+#subset just for phage Amboise 
+df_relab
+
+df_relab_amboise <- df_relab[df_relab$contigname == "ON453899.1_Clostridium_phage_Amboise__complete_genome",]
+
+write.csv(df_relab_amboise, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_list_analyses/samtools/prism/amboise.csv" )
+
+
+df_relab
+
+df_relab_maintenon <- df_relab[df_relab$contigname == "ON453900.1_Clostridium_phage_Maintenon__complete_genome",]
+
+write.csv(df_relab_maintenon, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_list_analyses/samtools/prism/maintenon.csv" )
+
+
+
+
+#Calculate the relative abundance ratio between amboise and maintenon 
+
+df_relab_amboise$amboise <- df_relab_amboise$relab
+df_relab_maintenon$maintenon <- df_relab_maintenon$relab
+
+
+
+df_relab_amboise2 <- df_relab_amboise %>%
+  select(Day, filename, amboise)
+
+df_relab_maintenon2 <- df_relab_maintenon %>%
+    select(Day, filename, maintenon)
+
+comb_c_innoc_phages <- left_join(df_relab_amboise2, df_relab_maintenon2, by = "filename")
+
+comb_c_innoc_phages$amb_main_ratio <- comb_c_innoc_phages$amboise/comb_c_innoc_phages$maintenon
+
+write.csv(comb_c_innoc_phages, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_list_analyses/samtools/prism/amboise_maintenon_ratio
+          .csv")
+
+```
+
+```{r}
+#calculate RPKM - for comparison use for Amboise: Maintenon ratio #following instructions here: https://www.rna-seqblog.com/rpkm-fpkm-and-tpm-clearly-explained/
+
+samtools_rpkm <- samtools  %>%
+    group_by(filename) %>%
+    summarise(sum_reads = sum(numreads), endpos, numreads, contigname)
+
+#1 Count up the total reads in a sample and divide that number by 1,000,000 – this is our “per million” scaling factor.
+
+samtools_rpkm$reads_per_mil_scal <-  samtools_rpkm$sum_reads/1000000
+
+#2 Divide the read counts by the “per million” scaling factor. This normalizes for sequencing depth, giving you reads per million (RPM)
+
+samtools_rpkm$rpm <-  samtools_rpkm$numreads/samtools_rpkm$reads_per_mil_scal
+
+#3 Divide the RPM values by the length of the gene, in kilobases. This gives you RPKM.
+#first convert bp to kbp 
+
+samtools_rpkm$kbp_length <- samtools_rpkm$endpos/1000
+samtools_rpkm$RPKM <- samtools_rpkm$rpm/samtools_rpkm$kbp_length
+
+
+samtools_rpkm2 <- left_join(virome_metadata, samtools_rpkm, by = "filename")
+
+
+
+
+ #Grouping dataframe by treatment and family and summing relative abundances within each subgroup 
+plot_df_rpkm <- ggplot(samtools_rpkm2 , aes(fill= contigname, y = samtools_rpkm2$RPKM, x=factor(samtools_rpkm2$filename))) +
+labs(x="Sample") + labs(y="Relative abundance") + labs(fill="family") + 
+geom_bar(position = "fill",stat ="identity")  +
+theme(axis.text.x=element_text(angle=90,hjust=1)) +
+    scale_fill_manual(values = custom_palette) 
+
+
+plot_df_rpkm + theme_classic() +
+  theme(text=element_text(family="Arial", face="bold", size=15)) + theme(axis.text.x = element_text(size = 3)) + 
+  
+  theme(legend.text = element_text(size = 2),
+        legend.title = element_text(size = 2)) 
+
+
+#sanity check - trends look the same 
+
+
+#now calculate the ratio between amboise and main 
+
+samtools_rpkm_amb <- samtools_rpkm2[samtools_rpkm2$contigname == "ON453899.1_Clostridium_phage_Amboise__complete_genome",]
+samtools_rpkm_main <- samtools_rpkm2[samtools_rpkm2$contigname == "ON453900.1_Clostridium_phage_Maintenon__complete_genome",]
+
+samtools_rpkm_amb$amboise  <-  samtools_rpkm_amb$RPKM  
+ samtools_rpkm_main$maintenon <- samtools_rpkm_main$RPKM
+
+samtools_rpkm_amb2 <- samtools_rpkm_amb %>%
+  select(Day, filename, amboise)
+
+samtools_rpkm_main2 <- samtools_rpkm_main %>%
+    select(Day, filename, maintenon)
+
+comb_rpkm_amb_main <- left_join(samtools_rpkm_amb2,samtools_rpkm_main2, by = "filename" )
+comb_rpkm_amb_main$ratio <- comb_rpkm_amb_main$amboise/comb_rpkm_amb_main$maintenon
+sort(comb_rpkm_amb_main$ratio)
+
+```
+
+```{r}
+write.csv(comb_rpkm_amb_main, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_list_analyses/samtools/prism/rpkm_amboise_maintenon_ratio.csv")
+
+```
+
+
+
+
+```{r}
+#sanity_check - num reads
+ numreads <- samtools %>%
+    group_by(filename) %>%
+    summarise(sum_reads = sum(numreads), numreads)
+
+
+
+
+```
+
+```{r}
+##PHYLOSEQ### 
+
+
+#Use the function below that I wrote for the HMP-2 dataset to convert the samtools output to an OTU table that can be used for Phyloseq
+
+##Removing the 
+
+library(phyloseq)
+library(dplyr)
+
+#Creating a function that converts the samtools outputs to a matrix that can be used by Phyloseq 
+#option to choose "meandepth" (length normalized read counts) or raw read counts "numreads"
+
+ps_otu_tab_maker <- function(sam_tools_output, reads) {
+  
+  
+  
+  #read in and select necessary columns for ps 
+  
+sam_tools_output_1 <- sam_tools_output %>%
+  select(filename, contigname, reads)
+sam_tools_output_1
+
+
+
+
+if(reads == "meandepth") {
+sam_tools_output_1$meandepth <- round(sam_tools_output_1$meandepth, 0)
+}  
+  else if (reads == "numreads")
+{sam_tools_output_1$numreads <- round(sam_tools_output_1$numreads, 0)
+
+}   else {sam_tools_output_1$corrected_reads <- round(sam_tools_output_1$corrected_reads, 0)   } 
+
+
+
+
+
+
+
+
+
+
+
+
+#round the decimals - necssary for ps 
+#sam_tools_output_1$meandepth <- round(sam_tools_output_1$meandepth, 0)
+
+#sam_tools_output_1
+
+
+# turn this into a correct format for ps 
+
+
+sam_tools_output_2 <- sam_tools_output_1 %>%
+                 pivot_wider(names_from = filename, values_from = reads)
+
+#replace nas in the df with 0 
+
+sam_tools_output_2[is.na(sam_tools_output_2)] = 0
+#sam_tools_output_2
+
+#make the contig column the rownames
+ sam_tools_output_3 <- sam_tools_output_2 %>%
+  tibble::column_to_rownames("contigname") 
+ 
+# Convert to matrix
+
+sam_tools_matrix <- as.matrix(sam_tools_output_3)
+ sam_tools_matrix
+
+
+}
+
+
+
+
+
+#choose the "mean depth" option so that we get length normalized reads 
+
+ 
+otu_table_ps_lb_virome <-  ps_otu_tab_maker(samtools, reads = "meandepth")
+
+
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+#Taxa for PS
+
+omm12_taxa_virome <- read.csv("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_taxonomy.csv")
+
+
+omm12_taxa_virome <- omm12_taxa_virome %>% 
+tibble::column_to_rownames("contigname")
+
+omm12_taxa_virome <- as.matrix(omm12_taxa_virome)
+omm12_taxa_virome
+
+# metadata for PS 
+
+#read in metadata - only difference here is im making filename the rowname
+
+virome_metadata_1 <- read.csv("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /virome_metadata.csv", header = TRUE)
+
+#factor levels 
+virome_metadata_1$Treatment <- factor(virome_metadata_1$Treatment, levels = c("control", "colitis"))
+
+
+virome_metadata_1 <- virome_metadata_1 %>% 
+tibble::column_to_rownames("filename")
+
+
+```
+
+
+
+
+
+```{r}
+#PS object for the virome 
+
+library("phyloseq")
+OTU_OMM12_V = otu_table(otu_table_ps_lb_virome, taxa_are_rows = TRUE)
+TAX_OMM12_V = tax_table(omm12_taxa_virome)
+META_OMM12_V <- sample_data(virome_metadata_1)
+sample_names(virome_metadata_1) <- virome_metadata_1$filename
+PS_OMM12_V = phyloseq(OTU_OMM12_V, TAX_OMM12_V, META_OMM12_V)
+PS_OMM12_V
+
+
+
+
+```
+
+
+```{r}
+
+#PS1 
+comp_barplot(PS_OMM12_V, n_taxa =12, tax_level = "Species", sample_order = "bray")
+
+comp_barplot(PS_OMM12_V, n_taxa =12, tax_level = "Species", sample_order = "bray",group_by = "Peak_colitis")
+
+
+
+
+```
+
+```{r}
+#95% of min sampled reads 
+
+rarefied_reads_1_v <-  rarefy_even_depth(PS_OMM12_V, rngseed=1, sample.size=0.95*min(sample_sums(PS_OMM12_V)), replace=F)
+rarecurve(t(otu_table(rarefied_reads_1_v)), step = 50, cex=0.5, label = FALSE)
+
+
+
+
+comp_barplot(rarefied_reads_1_v, n_taxa =12, tax_level = "Species", sample_order = "bray")
+
+```
+```{r}
+#step 1 subset the ps objects to only include the days that are found in all virome sample s
+ rar_subsetted_ps1_v <- subset_samples(rarefied_reads_1_v, Day == "9" | Day == "17" | Day == "18" | Day == "21" | Day == "28" )
+
+ cols_treats <- c("#ADD8E6","#f97c7c")
+
+#use rearefied reads to generate Bray- PcoA 
+ 
+  
+ rarefied_reads_1_bc_pcoA_v <-rar_subsetted_ps1_v  %>%
+   dist_calc("bray") %>%
+  ord_calc("PCoA") %>%
+  ord_plot(color = "Treatment", shape = "Day", size = 4) +
+       scale_colour_manual(labels = c("Control", "Colitis"), values = cols_treats)  
+ rarefied_reads_1_bc_pcoA_v + theme_bw()  + 
+  labs(shape="Day", color="Treatment") + 
+   theme(panel.grid.major = element_blank(),
+panel.grid.minor = element_blank())
+
+
+ 
+ 
+
+```
+
+```{r}
+
+#Get relative abundance from PS object - do this on non rarefied data 
+
+ps_melt(PS_OMM12_V)
+
+
+relative_abundance_virome <-   PS_OMM12_V %>% 
+      tax_glom(taxrank = "Species") %>% 
+        transform_sample_counts(function(x) {x/sum(x)}) %>% 
+        psmelt() %>%
+        select(Species, Sample, Abundance) %>%
+        spread(Sample, Abundance)
+
+
+
+        
+        
+        
+write.csv()
+```
+
+
+
+
+```{r}
+#calculate bray distances by day 
+
+rar_ps2_9_v <- subset_samples(rar_subsetted_ps1_v,Day == "9")
+rar_ps2_17_v <- subset_samples(rar_subsetted_ps1_v, Day == "17")
+rar_ps2_18_v <- subset_samples(rar_subsetted_ps1_v, Day == "18")
+rar_ps2_21_v <- subset_samples(rar_subsetted_ps1_v, Day == "21")
+rar_ps2_28_v <- subset_samples(rar_subsetted_ps1_v, Day == "28")
+
+
+
+
+bray_dist_matrix <- function(phy) {
+  
+  
+  
+  dist1 <- phy %>%
+  dist_calc("bray")
+  dist_get(dist1)
+  
+dist_matrix <- as.matrix(dist_get(dist1))
+dist_matrix
+  
+
+}
+
+
+
+
+#getting dist matrices for rarefied counts 
+
+
+rar_ps2_9_dist_v <-  bray_dist_matrix(rar_ps2_9_v)
+rar_ps2_17_dist_v <- bray_dist_matrix(rar_ps2_17_v)
+rar_ps2_18_dist_v <-  bray_dist_matrix(rar_ps2_18_v)
+rar_ps2_21_dist_v <-  bray_dist_matrix(rar_ps2_21_v)
+rar_ps2_28_dist_v <-  bray_dist_matrix(rar_ps2_28_v)
+
+
+write.csv(rar_ps2_9_dist_v, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_list_analyses/samtools/diversity/dist9.csv")
+
+
+write.csv(rar_ps2_17_dist_v, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_list_analyses/samtools/diversity/dist17.csv")
+
+write.csv(rar_ps2_18_dist_v, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_list_analyses/samtools/diversity/dist18.csv")
+
+
+write.csv(rar_ps2_21_dist_v, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_list_analyses/samtools/diversity/dist21.csv")
+
+
+write.csv(rar_ps2_28_dist_v, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_list_analyses/samtools/diversity/dist28.csv")
+
+
+
+
+```
+
+```{r}
+#calculating the AMBOISE:MAINTENON RATIO 
+rar_ps2_28_dist_v
+
+```
+
+
+
+
+
+
+```{r}
+
+
+####DESEQ2#### - Im going to use num reads instead of mean depth since length correcting reads isnt important here since we are looking at how these change between groups 
+
+
+#going to just focus on pre vs. post colitis (days 9. 17, 18)
+
+df_relab_subset <- df_relab[df_relab$Day == 9 | df_relab$Day == 17 | df_relab$Day == 18,]
+
+
+#For Deseq2 convert to a matrix with contig name 
+
+
+
+
+
+samtools_lb <- df_relab_subset[, c("filename", "contigname", "numreads")]
+samtools_lb
+
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(data.table)
+
+
+#use tiydrpivot wider 
+
+deseq_matrix_lb <-  tidyr::pivot_wider(samtools_lb, names_from = contigname, values_from = numreads)
+deseq_matrix_lb
+
+
+
+#switching the columns and rows so that each row is a different contig and each column is a different sample 
+switched_matrix_lb <-  t(deseq_matrix_lb)
+
+
+
+switched_matrix_lb
+
+
+
+#export this 
+write.csv(switched_matrix_lb, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_list_analyses/deseq2/switched_matrix.csv") 
+
+
+
+```
+
+
+
+
+```{r}
+#reading in manually edited switched matrix
+
+raw_counts2_lb <- read.csv("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_list_analyses/deseq2/edited_switched_matrix.csv", check.names = FALSE)
+raw_counts2_lb
+
+
+
+#Formatting the rawcount2_deseq2 transposed matrix 
+
+
+
+colnames(raw_counts2_lb)[1] <- "contig_ID"
+
+raw_counts2_lb
+
+
+#replace NA values with 0
+raw_counts2_lb[is.na(raw_counts2_lb)] = 0
+raw_counts2_lb
+
+#naming that column "contig_ID"
+
+contig_ID_lb <-  raw_counts2_lb$contig_ID
+
+#Now I am generating a "sample index" so I can exclude "contig_ID" from our matrix 
+
+sample_index_lb <- grepl("\\d", colnames(raw_counts2_lb))
+##of the column names, anything that contains a numeric 
+
+
+#converting to a matrix and only including the sample index columns 
+raw_counts_lb_matrix <- as.matrix(raw_counts2_lb[,sample_index_lb])
+raw_counts_lb_matrix
+
+
+rownames(raw_counts_lb_matrix) <- contig_ID_lb
+
+head(raw_counts_lb_matrix)
+
+#write.csv(raw_counts_matrix_deseq2_duerkop, "/Users/anshul.sinha/Desktop/Sequencing_analyses/phage_metagenomics_rainin_fall_2018/re-analyses_manuscript_data/deseq2/raw_counts_formatted_transposed_matrices/matrix_for_input.csv")
+```
+```{r}
+#reading in sample mapping file (coldata)
+sample_mapping_lb <- read.csv("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/virome /lb_prophages_list_analyses/deseq2/sample_mapping_virome_deseq_subset.csv", row.names = 1)
+
+sample_mapping_lb
+
+#changing all columns to factor 
+sample_mapping_lb <- mutate_if(sample_mapping_lb, is.character, as.factor)
+sample_mapping_lb <- mutate_if(sample_mapping_lb, is.integer, as.factor)
+sample_mapping_lb
+```
+
+```{r}
+#note that the row.names dont have a column name - this is consistent with how coldata is shown in the deseq2 vignette 
+
+
+sample_mapping_lb
+
+
+#Put the columns of the count data in the same order as rows names of the sample mapping, then make sure it worked (TRUE)
+
+raw_counts_lb_matrix <- raw_counts_lb_matrix[, unique(rownames(sample_mapping_lb))]
+
+
+all(colnames(raw_counts_lb_matrix) == rownames(sample_mapping_lb))
+
+sample_mapping_lb
+
+
+```
+
+```{r}
+library(DESeq2)
+#starting the object construction with a simple design per vignette 
+
+
+deseq2Data_lb <- DESeqDataSetFromMatrix(countData=raw_counts_lb_matrix, colData=sample_mapping_lb, design = ~ mouseID_n + Condition1)
+
+
+
+
+
+```
+
+```{r}
+#relevelling the condition and treatment variables so that the ref is pre-col -
+# relevelling the sample_mapping seems necessary, so that when we build the model.matrix, it contains the Treatment:Post_col values and not Treatment:Pre_col values 
+
+
+
+sample_mapping_lb$Condition1  <-relevel(sample_mapping_lb$Condition1, ref="pre_col")
+
+
+levels(sample_mapping_lb$Condition1)
+
+
+
+#creating more complex design - controlling for cage, looking at 
+
+
+mm_lb <- model.matrix(~ Treatment + Treatment:mouseID_n + Treatment:Condition1, sample_mapping_lb)
+mm_lb
+
+
+
+#Running DESeq with the new model matrix 
+deseq2Data_lb$Condition1 <- factor(deseq2Data_lb$Condition1, levels = c("post_col", "pre_col"))
+
+
+
+
+deseq2Data_lb = DESeq(deseq2Data_lb, full = mm_lb, betaPrior = FALSE)
+
+
+```
+```{r}
+
+deseq2_results_lb <-  results(deseq2Data_lb, contrast=list("Treatmentcolitis.Condition1post_col","Treatmentcontrol.Condition1post_col"))
+
+
+
+deseq2_results_lb <- as.data.frame(deseq2_results_lb)
+
+deseq2_results_lb <- deseq2_results_lb %>% 
+rownames_to_column(var = "contigname")
+deseq2_results_lb
+
+
+
+
+#remove leading spaces 
+deseq2_results_lb$contigname <- trimws(deseq2_results_lb$contigname, "left")
+
+
+
+
+#significant values 
+
+deseq2_results_lb_sig <- subset(deseq2_results_lb, padj < 0.05)
+
+
+deseq2_results_lb_sig <- as.data.frame(deseq2_results_lb_sig)
+deseq2_results_lb_sig
+
+```
+
+```{r}
+library(EnhancedVolcano)
+
+#in order to plot the cutoff of padj and not p-value, we need to give the pvalue column in the df the values from the padj column 
+
+
+deseq2_results_lb1 <- deseq2_results_lb
+deseq2_results_lb1$pvalue <- deseq2_results_lb1$padj
+
+
+keyvals_col_con_lb <- ifelse(
+    deseq2_results_lb1$log2FoldChange < -1 & deseq2_results_lb1$padj < 0.05, 'blue',
+      ifelse(deseq2_results_lb1$log2FoldChange > 1 & deseq2_results_lb1$padj < 0.05, 'red',
+        'light grey'))
+  keyvals_col_con_lb[is.na(keyvals_col_con_lb)] <- 'light grey'
+  names(keyvals_col_con_lb)[keyvals_col_con_lb == 'red'] <- 'Over-Abundant in Colitis'
+  names(keyvals_col_con_lb)[keyvals_col_con_lb == 'light grey'] <- 'Non-significant'
+  names(keyvals_col_con_lb)[keyvals_col_con_lb == 'blue'] <- 'Over-Abundant in Control'
+
+EV_col_con_lb <- EnhancedVolcano(deseq2_results_lb1, lab=NA , x = 'log2FoldChange',
+    y = 'pvalue',  pCutoff = 0.05, cutoffLineWidth = 0.1, selectLab = rownames(deseq2_results_lb1)[which(names(keyvals_col_con_lb) %in% c('Over-Abundant in Colitis', 'Over-Abundant in Control'))], pointSize = 2, gridlines.major = FALSE, gridlines.minor = FALSE, colCustom = keyvals_col_con_lb,  legendPosition = 'right', legendLabSize = 12,legendIconSize = 4.0, title = "", axisLabSize = 15,    subtitle = "", caption = ""
+)
+
+EV_col_con_lb
+
+```
+```{r}
+library(ggplot2)
+
+# Create a custom shape for a circle
+circle <- data.frame(x = 0, y = 0)
+
+deseq2_results_lb %>%
+  ggplot(aes(x = log2FoldChange, y = contigname)) +
+  geom_vline(xintercept = 0) +
+  geom_point(
+    aes(
+      x = log2FoldChange, 
+      y = contigname, 
+      color = ifelse(log2FoldChange > 0, "pastelred", "pastelblue")
+    ),
+    size = 5
+  ) +
+  geom_point(
+    data = filter(deseq2_results_lb, padj < 0.05),
+    aes(
+      x = log2FoldChange,
+      y = contigname,
+      color = "red"
+    ),
+    size = 7,
+    shape = 1
+  ) +  # Shape 1 is a circle in ggplot2
+  scale_color_manual(values = c("pastelblue" = "skyblue", "pastelred" = "lightcoral", "red" = "red")) +
+  theme_bw() +
+  theme(
+    axis.text.y = element_text(size = 7, face = "italic", color = "black"),
+    legend.position = "none"  # Remove the legend
+  ) +
+  guides(color = FALSE)  # Remove the legend
+
+```
+```{r}
+
+# Create a custom shape for a circle
+circle <- data.frame(x = 0, y = 0)
+
+deseq2_results_lb %>%
+  ggplot(aes(x = log2FoldChange, y = contigname)) +
+  geom_vline(xintercept = 0) +
+  geom_point(
+    aes(
+      x = log2FoldChange, 
+      y = contigname, 
+      color = ifelse(log2FoldChange > 0, "pastelred", "pastue")
+    ),
+    size = 5
+  ) +
+  geom_point(
+    data = filter(deseq2_results_lb, padj < 0.05),
+    aes(
+      x = log2FoldChange,
+      y = contigname,
+      color = "red"
+    ),
+    size = 7,
+    shape = 1
+  ) +  # Shape 1 is a circle in ggplot2
+  scale_color_manual(values = c("pastelblue" = "skyblue", "pastelred" = "lightcoral", "red" = "red")) +
+  theme_bw() +
+  theme(
+    axis.text.y = element_text(size = 7, face = "italic", color = "black"),
+    legend.position = "none"  # Remove the legend
+  ) +
+  guides(color = FALSE)  # Remove the legend
+```
+
+
