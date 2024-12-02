@@ -1,0 +1,1082 @@
+---
+title: "Untitled"
+author: "Anshul Sinha"
+date: '2023-10-04'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+```{r}
+library(data.table)
+library(rlang)
+library(tidyr)
+library(dplyr)
+library(RColorBrewer)
+library(ggplot2)
+library(microbiome)
+library(speedyseq)
+library(microViz)
+library(phyloseq)
+library(limma)
+library(edgeR)
+library(statmod)
+
+```
+
+
+```{r}
+#reading in the metaphlan 
+
+
+metahplan_output_raw <- read.table("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/metaphlan/merged_abundance_table_species.txt", header = TRUE)
+
+#pivot from matrix form to df
+metahplan_output_df <- metahplan_output_raw %>%
+  
+  pivot_longer(!clade_name, names_to = "filename", values_to = "percent_relab")
+
+#divide relab so its a proportion 
+metahplan_output_df$relab <- metahplan_output_df$percent_relab/100
+
+
+#change filename 
+metahplan_output_df$filename <- sub("^([^_]+_[^_]+_[^_]+).*", "\\1", metahplan_output_df$filename)
+
+
+
+
+#now read in the samtools output from the OMM12 bowtie mapping, just so I can get total read counts per 
+
+samtools_bulk <- read.table("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/omm12_samtools/concatenated_output.tsv", header = TRUE, sep = "\t")
+colnames(samtools_bulk) <- c("contig_name_filename", "startpos", "endpos", "numreads", "covbases", "coverage",  "meandepth", "meanbaseq", "meanmapq")
+
+
+
+# Split column by comma
+df_split <- strsplit(samtools_bulk$contig_name_filename, ":")
+
+# Create new columns for each split part
+samtools_bulk$filename <- sapply(df_split, "[[", 1)
+samtools_bulk$contigname <- sapply(df_split, "[[", 2)
+samtools_bulk$filename <- sub("^([^_]+_[^_]+_[^_]+).*", "\\1", samtools_bulk$filename)
+
+#get total read counts per sample
+
+ 
+ samtools_bulk_reads <- samtools_bulk %>%
+    group_by(filename) %>%
+    summarise(sum_reads = sum(numreads), numreads)
+
+
+#get df with just filename and reads 
+ 
+ reads_df <-  samtools_bulk_reads %>%
+    select(filename, sum_reads)
+
+reads_df <- unique(reads_df)
+
+
+
+#now left_join the two 
+
+joined_metaphlan <- left_join(metahplan_output_df, reads_df, by = "filename")
+
+
+#now get "length adjusted and normalized read counts" by multiplying relab by sum_reads 
+
+joined_metaphlan$reads <- joined_metaphlan$relab*joined_metaphlan$sum_reads
+
+
+
+#I can use this 
+
+
+```
+
+
+
+```{r}
+#read in metadata 
+
+metadata <- read.csv("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/bulk_metadata.csv", header = TRUE)
+
+
+
+
+#give everything in the filename a B_ before 
+metadata$filename <- paste0("B_", metadata$filename)
+
+
+```
+
+
+
+
+
+```{r}
+
+
+###PHYLOSEQ### 
+
+
+#Use the function below that I wrote for the HMP-2 dataset to convert the samtools output to an OTU table that can be used for Phyloseq
+
+##Removing the 
+
+library(phyloseq)
+library(dplyr)
+
+#Creating a function that converts the samtools outputs to a matrix that can be used by Phyloseq 
+#option to choose "meandepth" (length normalized read counts) or raw read counts "numreads"
+
+ps_otu_tab_maker <- function(sam_tools_output, reads) {
+  
+  
+  
+  #read in and select necessary columns for ps 
+  
+sam_tools_output_1 <- sam_tools_output %>%
+  select(filename, contigname, reads)
+sam_tools_output_1
+
+
+
+
+if(reads == "meandepth") {
+sam_tools_output_1$meandepth <- round(sam_tools_output_1$meandepth, 0)
+}  
+  else if (reads == "numreads")
+{sam_tools_output_1$numreads <- round(sam_tools_output_1$numreads, 0)
+
+}   else {sam_tools_output_1$corrected_reads <- round(sam_tools_output_1$corrected_reads, 0)   } 
+
+
+
+
+
+
+
+
+
+
+
+
+#round the decimals - necssary for ps 
+#sam_tools_output_1$meandepth <- round(sam_tools_output_1$meandepth, 0)
+
+#sam_tools_output_1
+
+
+# turn this into a correct format for ps 
+
+
+sam_tools_output_2 <- sam_tools_output_1 %>%
+                 pivot_wider(names_from = filename, values_from = reads)
+
+#replace nas in the df with 0 
+
+sam_tools_output_2[is.na(sam_tools_output_2)] = 0
+#sam_tools_output_2
+
+#make the contig column the rownames
+ sam_tools_output_3 <- sam_tools_output_2 %>%
+  tibble::column_to_rownames("contigname") 
+ 
+# Convert to matrix
+
+sam_tools_matrix <- as.matrix(sam_tools_output_3)
+ sam_tools_matrix
+
+
+}
+
+
+
+#formatting so that I can use the otu maker
+
+edited_metaphlan <- joined_metaphlan %>%
+    select(filename, clade_name, reads)
+
+colnames(edited_metaphlan) <- c("filename", "contigname", "numreads")
+#choose the "mean depth" option so that we get length normalized reads 
+
+#this is the otu table 
+ 
+otu_table_ps_bulk_metaphlan <-  ps_otu_tab_maker(edited_metaphlan, reads = "numreads")
+
+
+
+
+```
+
+
+```{r}
+
+#Taxa for PS
+
+omm12_taxa_metap <- read.csv("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/metaphlan/omm12_taxonomy_table_metaphlan.csv")
+
+
+omm12_taxa_metap <- omm12_taxa_metap %>% 
+tibble::column_to_rownames("contigname")
+
+omm12_taxa_metap <- as.matrix(omm12_taxa_metap)
+omm12_taxa_metap
+
+# metadata for PS 
+
+#read in metadata - only difference here is im making filename the rowname
+
+metadata2 <- read.csv("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/bulk_metadata.csv", header = TRUE)
+metadata2$filename <- paste0("B_", metadata2$filename)
+
+#factor levels 
+metadata2$Treatment <- factor(metadata2$Treatment, levels = c("control", "colitis"))
+
+
+metadata2 <- metadata2 %>% 
+tibble::column_to_rownames("filename")
+
+
+
+
+```
+
+
+```{r}
+
+
+#USING THE FIRST OTU TABLE 
+library("phyloseq")
+OTU_OMM12_B_metaphlan = otu_table(otu_table_ps_bulk_metaphlan, taxa_are_rows = TRUE)
+TAX_OMM12_B_metaphlan = tax_table(omm12_taxa_metap)
+META_OMM12_B_metaphlan <- sample_data(metadata2)
+sample_names(metadata2) <- metadata2$filename
+PS_OMM12_metaphlan = phyloseq(OTU_OMM12_B_metaphlan, TAX_OMM12_B_metaphlan, META_OMM12_B_metaphlan)
+PS_OMM12_metaphlan
+
+
+```
+
+
+
+
+```{r}
+library(microViz)
+
+#PS1 
+comp_barplot(PS_OMM12_metaphlan, n_taxa =12, tax_level = "Species", sample_order = "bray")
+
+
+
+#Subsetting based on whether samples were colitis 16.17.18 or NOT 
+#PS1 
+comp_barplot(PS_OMM12_metaphlan, n_taxa =12, tax_level = "Species", sample_order = "bray",group_by = "Peak_colitis")
+
+
+
+#I think they look pretty similar depending on sample 
+```
+
+```{r}
+
+
+#rarefy reads for distance and diversity calculations
+ 
+#95% of min sampled reads 
+
+rarefied_reads_1_metaphlan <-  rarefy_even_depth(PS_OMM12_metaphlan, rngseed=1, sample.size=0.95*min(sample_sums(PS_OMM12_metaphlan)), replace=F)
+rarecurve(t(otu_table(rarefied_reads_1_metaphlan)), step = 50, cex=0.5, label = FALSE)
+
+
+
+```
+
+```{r}
+
+#step 1 subset the ps objects to only include the days that are found in the virome sample s
+ rar_vir_subsetted_ps1_metaphlan <- subset_samples(rarefied_reads_1_metaphlan, Days_Post_DSS == "0" | Days_Post_DSS == "8" | Days_Post_DSS == "9" | Days_Post_DSS == "12" | Days_Post_DSS == "19" )
+
+
+
+
+ cols_treats <- c("blue","red")
+
+#use rearefied reads to generate Bray- PcoA 
+ 
+ 
+ 
+    
+ rarefied_reads_1_bc_pcoA_metaphlan <-rar_vir_subsetted_ps1_metaphlan  %>%
+   dist_calc("bray") %>%
+  ord_calc("PCoA") %>%
+  ord_plot(color = "Treatment", shape = "Days_Post_DSS", size = 4) +
+       scale_colour_manual(labels = c("Control", "Colitis"), values = cols_treats)  
+ rarefied_reads_1_bc_pcoA_metaphlan + theme_bw()  + 
+  labs(shape="Days_Post_DSS", color="Treatment") + 
+   theme(panel.grid.major = element_blank(),
+panel.grid.minor = element_blank()) +
+  theme(
+    panel.grid.major = element_blank(),
+    panel.grid.minor = element_blank(),
+    axis.title.x = element_text(size = 16),  # Adjust X-axis title size
+    axis.title.y = element_text(size = 16), 
+    legend.text = element_text(size=16),
+    legend.title = element_text(size = 18),   # Adjust legend title size
+    plot.title = element_text(size = 16)      # Adjust plot title size
+  ) +
+  guides(
+    shape = guide_legend(title = "Days Post DSS"),  # Change legend title for shape
+    color = guide_legend(title = "Treatment")       # Keep legend title for color
+  )
+
+ 
+ 
+  
+  
+ 
+ 
+```
+
+
+
+```{r}
+#Relative Abundance Plots 
+#PS_Melt 
+rar_vir_subsetted_ps1_metaphlan_melt <- ps_melt(rar_vir_subsetted_ps1_metaphlan)
+
+
+# Change Clostridium_butyricum to Clostridium innocuum and pseudococcoides to coccoides 
+old_names <- c("Blautia_pseudococcoides", "Clostridium_butyricum")
+new_names <- c("Blautia_coccoides ", "Clostridium_innocuum")
+
+
+
+
+
+
+# change names
+rar_vir_subsetted_ps1_metaphlan_melt <- rar_vir_subsetted_ps1_metaphlan_melt %>%
+  mutate(OTU = case_when(
+    OTU %in% old_names ~ new_names[match(OTU, old_names)],
+    TRUE ~ OTU
+  ))
+rar_vir_subsetted_ps1_metaphlan_melt
+
+
+# Calculate relative abundance
+rar_vir_subsetted_ps1_metaphlan_melt_relab <- rar_vir_subsetted_ps1_metaphlan_melt %>%
+  group_by(Sample) %>%
+  mutate(RelativeAbundance = Abundance / sum(Abundance))
+
+
+#create facet order 
+rar_vir_subsetted_ps1_metaphlan_melt_relab$CombinedOrder <- factor(paste(rar_vir_subsetted_ps1_metaphlan_melt_relab$Days_Post_DSS, rar_vir_subsetted_ps1_metaphlan_melt_relab$Treatment), levels = c("0 control", "0 colitis","8 control", "8 colitis", "9 control", "9 colitis", "12 control", "12 colitis", "19 control", "19 colitis"))
+
+
+#remove Turicibacter 
+
+rar_vir_subsetted_ps1_metaphlan_melt_relab <- rar_vir_subsetted_ps1_metaphlan_melt_relab[rar_vir_subsetted_ps1_metaphlan_melt_relab$OTU != "Turicibacter_sp_TS3",]
+
+
+#manually specify colours 
+
+
+# Get unique levels of the "Category" variable
+unique_OTU <- unique(rar_vir_subsetted_ps1_metaphlan_melt_relab$OTU)
+# This will be the order of the OTUs for the colours below 
+
+
+
+OTU_colors <- c("#ff6961", "#C1E1C1", "#3D426B", "#ff964f", "#b39eb5", "#F2E6B1","brown", "grey", "black", "turquoise", "#dea5a4")  
+#E.clost - red
+#B. caec - green
+#A. mucin - blue 
+#B. coccoides -orange 
+#T. muris pink?
+#C. innoc yellow 
+#F. plautii grey 
+# M intest black
+
+
+#For plotting purposes, remove the "D" and "C" of the plot 
+rar_vir_subsetted_ps1_metaphlan_melt_relab$Mouse <- substring(rar_vir_subsetted_ps1_metaphlan_melt_relab$Mouse, 2)
+
+
+
+
+###WITHOUT LEGEND 
+# Create a stacked bar plot with increased size of y-axis labels
+ggplot(rar_vir_subsetted_ps1_metaphlan_melt_relab, aes(x = Mouse, y = RelativeAbundance, fill = OTU)) +
+  geom_bar(stat = "identity") +
+  labs(title = "", x = "Sample", y = "Relative Abundance") +
+  scale_fill_manual(values = OTU_colors) +
+  theme_minimal() + 
+  theme(legend.text = element_text(size = 0),  # Adjust the size of legend text
+        legend.title = element_text(size = 0),
+        axis.text.x = element_text(size = 14, angle = 0, hjust = 1),  # Angle the x-axis labels
+        axis.text.y = element_text(size = 14),  # Increase the size of y-axis labels
+        strip.text.x = element_text(size = 0),  # Remove x-axis facet labels
+        legend.position = "none",
+        strip.background = element_blank(),     # Remove strip background
+        strip.placement = "outside") +          # Place strip labels outside the plot
+  facet_grid(~CombinedOrder, scales = "free", space = "free_y")
+
+
+
+
+###WITH LEGEND 
+
+
+#first remove underscore and italicize 
+# Remove underscores and italicize legend labels in the original data frame
+rar_vir_subsetted_ps1_metaphlan_melt_relab$OTU <- str_replace_all(rar_vir_subsetted_ps1_metaphlan_melt_relab$OTU, "_", " ")
+
+
+
+# Load the stringr package
+library(stringr)
+ggplot(rar_vir_subsetted_ps1_metaphlan_melt_relab, aes(x = Mouse, y = RelativeAbundance, fill = OTU)) +
+  geom_bar(stat = "identity") +
+  labs(title = "", x = "Sample", y = "Relative Abundance") +
+  scale_fill_manual(values = OTU_colors, name = "OTU") +  # Use name to set legend title
+  theme_minimal() + 
+  theme(legend.text = element_text(size = 10, face = "italic"),  # Adjust the size and italicize legend text
+        legend.title = element_text(size = 12),  # Adjust the size of legend title
+        axis.text.x = element_text(size = 14, angle = 0, hjust = 1),  # Angle the x-axis labels
+        axis.text.y = element_text(size = 14),  # Increase the size of y-axis labels
+        strip.text.x = element_text(size = 0),  # Remove x-axis facet labels
+        legend.position = "right",  # Position the legend on the right
+        strip.background = element_blank(),  # Remove strip background
+        strip.placement = "outside") +  # Place strip labels outside the plot
+  facet_grid(~CombinedOrder, scales = "free", space = "free_y") +
+  guides(fill = guide_legend(title = "OTU"))  # Add a legend with title "OTU"
+
+
+
+#subset based on on E.cost D9
+rar_vir_subsetted_ps1_metaphlan_melt_relab_eclost_d9 <- rar_vir_subsetted_ps1_metaphlan_melt_relab[rar_vir_subsetted_ps1_metaphlan_melt_relab$]
+
+```
+
+```{r}
+
+#calculate bray distances by day (Note - Day refers to day of experiment not the day post-DSS) - just convert manually in prism 
+#day 9 = day = 0 post-DSS
+#day 17 = 8
+#day 18 = 9
+#day 21 = 12 
+# day 28 = 19
+
+
+rar_metaphlan_9 <- subset_samples(rar_vir_subsetted_ps1_metaphlan,Day == "9")
+rar_metaphlan_17 <- subset_samples(rar_vir_subsetted_ps1_metaphlan, Day == "17")
+rar_metaphlan_18 <- subset_samples(rar_vir_subsetted_ps1_metaphlan, Day == "18")
+rar_metaphlan_21 <- subset_samples(rar_vir_subsetted_ps1_metaphlan, Day == "21")
+rar_metaphlan_28 <- subset_samples(rar_vir_subsetted_ps1_metaphlan, Day == "28")
+
+
+
+
+bray_dist_matrix <- function(phy) {
+  
+  
+  
+  dist1 <- phy %>%
+  dist_calc("bray")
+  dist_get(dist1)
+  
+dist_matrix <- as.matrix(dist_get(dist1))
+dist_matrix
+  
+
+}
+
+
+
+
+#getting dist matrices for rarefied counts 
+
+
+rar_metaphlan_9_dist <-  bray_dist_matrix(rar_metaphlan_9)
+rar_metaphlan_17_dist <- bray_dist_matrix(rar_metaphlan_17)
+rar_metaphlan_18_dist <-  bray_dist_matrix(rar_metaphlan_18)
+rar_metaphlan_21_dist <-  bray_dist_matrix(rar_metaphlan_21)
+rar_metaphlan_28_dist <-  bray_dist_matrix(rar_metaphlan_28)
+
+
+write.csv(rar_metaphlan_9_dist, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/metaphlan/diversity/distance_9.csv")
+
+
+write.csv(rar_metaphlan_17_dist, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/metaphlan/diversity/distance_17.csv")
+
+write.csv(rar_metaphlan_18_dist, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/metaphlan/diversity/distance_18.csv")
+
+
+write.csv(rar_metaphlan_21_dist, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/metaphlan/diversity/distance_21.csv")
+
+
+write.csv(rar_metaphlan_28_dist,"/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/metaphlan/diversity/distance_28.csv")
+
+
+
+
+```
+
+```{r}
+#######Enterocloster######
+
+rar_vir_subsetted_metaphlan_plot_Entero <- rar_vir_subsetted_ps1_metaphlan %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Species") %>%
+      tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("Enterocloster clostridioformis") %>% # adds Lact as sample data!
+  samdat_tbl()
+
+  rar_vir_subsetted_metaphlan_plot_Entero$entero <-  rar_vir_subsetted_metaphlan_plot_Entero$`Enterocloster clostridioformis`
+
+  rar_vir_subsetted_metaphlan_plot_Entero$Day <- as.character(rar_vir_subsetted_metaphlan_plot_Entero$Day)
+
+  
+  rar_vir_subsetted_metaphlan_plot_Entero$Day <-  factor(rar_vir_subsetted_metaphlan_plot_Entero$Day, levels = c("9", "17", "18", "21", "28"))
+
+  
+
+
+ggplot(rar_vir_subsetted_metaphlan_plot_Entero, aes(x = Day, y = entero, color = Treatment)) +
+  geom_jitter(
+    position = position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1),
+    alpha = 0.6,
+    size = 7  # Adjust the size of the points
+  ) +
+  stat_summary(
+    fun = mean,  # Use mean as the summary function
+    geom = "point",  # Plot points
+    shape = 3,  # Change point shape (triangle in this case)
+    size = 4.5,  # Adjust the size of the mean point
+    position = position_dodge(width = 0.6),
+    aes(group = Treatment),  # Group by treatment for mean
+    color = "black"  # Set the color of the mean points to black
+  ) +
+  scale_color_manual(values = cols_treats) +
+  scale_y_continuous(
+    breaks = log2(1 / 2^(0:14)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.000005), log2(0.8))
+  ) +
+  theme_bw() +
+  theme(
+    axis.title.x = element_text(size = 16),
+    axis.text.x = element_text(size = 12.5),
+    axis.title.y = element_text(size = 16), 
+    axis.text.y = element_text(size = 12.5)
+  )
+
+
+
+### C. innoc 
+
+
+rar_vir_subsetted_metaphlan_plot_clost <- rar_vir_subsetted_ps1_metaphlan %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Species") %>%
+      tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("Clostridium innocuum") %>% # adds Lact as sample data!
+  samdat_tbl()
+
+  rar_vir_subsetted_metaphlan_plot_clost$clost <-  rar_vir_subsetted_metaphlan_plot_clost$`Clostridium innocuum`
+
+  rar_vir_subsetted_metaphlan_plot_clost$Day <- as.character(rar_vir_subsetted_metaphlan_plot_clost$Day)
+
+  
+  rar_vir_subsetted_metaphlan_plot_clost$Day <-  factor(rar_vir_subsetted_metaphlan_plot_clost$Day, levels = c("9", "17", "18", "21", "28"))
+
+  
+
+
+ggplot(rar_vir_subsetted_metaphlan_plot_clost, aes(x = Day, y = clost, color = Treatment)) +
+  geom_jitter(
+    position = position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1),
+    alpha = 0.6,
+    size = 7  # Adjust the size of the points
+  ) +
+  stat_summary(
+    fun = mean,  # Use mean as the summary function
+    geom = "point",  # Plot points
+    shape = 3,  # Change point shape (triangle in this case)
+    size = 4.5,  # Adjust the size of the mean point
+    position = position_dodge(width = 0.6),
+    aes(group = Treatment),  # Group by treatment for mean
+    color = "black"  # Set the color of the mean points to black
+  ) +
+  scale_color_manual(values = cols_treats) +
+  scale_y_continuous(
+    breaks = log2(1 / 2^(0:12)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.00005), log2(0.4))
+  ) +
+  theme_bw() +
+  theme(
+    axis.title.x = element_text(size = 16),
+    axis.text.x = element_text(size = 12.5),
+    axis.title.y = element_text(size = 16), 
+    axis.text.y = element_text(size = 12.5)
+  )
+
+
+
+### E. faecalis 
+
+rar_vir_subsetted_metaphlan_plot_efaec <- rar_vir_subsetted_ps1_metaphlan %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Species") %>%
+      tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("Enterococcus faecalis") %>% # adds Lact as sample data!
+  samdat_tbl()
+
+  rar_vir_subsetted_metaphlan_plot_efaec$efaec <-  rar_vir_subsetted_metaphlan_plot_efaec$`Enterococcus faecalis`
+
+  rar_vir_subsetted_metaphlan_plot_efaec$Day <- as.character(rar_vir_subsetted_metaphlan_plot_efaec$Day)
+
+  
+  rar_vir_subsetted_metaphlan_plot_efaec$Day <-  factor(rar_vir_subsetted_metaphlan_plot_efaec$Day, levels = c("9", "17", "18", "21", "28"))
+
+  
+
+
+ggplot(rar_vir_subsetted_metaphlan_plot_efaec, aes(x = Day, y = efaec, color = Treatment)) +
+  geom_jitter(
+    position = position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1),
+    alpha = 0.6,
+    size = 7  # Adjust the size of the points
+  ) +
+  stat_summary(
+    fun = mean,  # Use mean as the summary function
+    geom = "point",  # Plot points
+    shape = 3,  # Change point shape (triangle in this case)
+    size = 4.5,  # Adjust the size of the mean point
+    position = position_dodge(width = 0.6),
+    aes(group = Treatment),  # Group by treatment for mean
+    color = "black"  # Set the color of the mean points to black
+  ) +
+  scale_color_manual(values = cols_treats) +
+  scale_y_continuous(
+    breaks = log2(1 / 2^(0:12)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.000005), log2(0.2))
+  ) +
+  theme_bw() +
+  theme(
+    axis.title.x = element_text(size = 16),
+    axis.text.x = element_text(size = 12.5),
+    axis.title.y = element_text(size = 16), 
+    axis.text.y = element_text(size = 12.5)
+  )
+
+### B caec
+
+
+rar_vir_subsetted_metaphlan_plot_bcaec <- rar_vir_subsetted_ps1_metaphlan %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Species") %>%
+      tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("Bacteroides caecimuris") %>% # adds Lact as sample data!
+  samdat_tbl()
+
+  rar_vir_subsetted_metaphlan_plot_bcaec$bcaec <-  rar_vir_subsetted_metaphlan_plot_bcaec$`Bacteroides caecimuris`
+
+  rar_vir_subsetted_metaphlan_plot_bcaec$Day <- as.character(rar_vir_subsetted_metaphlan_plot_bcaec$Day)
+
+  
+  rar_vir_subsetted_metaphlan_plot_bcaec$Day <-  factor(rar_vir_subsetted_metaphlan_plot_bcaec$Day, levels = c("9", "17", "18", "21", "28"))
+
+  
+
+
+
+
+
+
+
+ggplot(rar_vir_subsetted_metaphlan_plot_bcaec, aes(x = Day, y = bcaec, color = Treatment)) +
+  geom_jitter(
+    position = position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1),
+    alpha = 0.6,
+    size = 7  # Adjust the size of the points
+  ) +
+  stat_summary(
+    fun = mean,  # Use mean as the summary function
+    geom = "point",  # Plot points
+    shape = 3,  # Change point shape (triangle in this case)
+    size = 4.5,  # Adjust the size of the mean point
+    position = position_dodge(width = 0.6),
+    aes(group = Treatment),  # Group by treatment for mean
+    color = "black"  # Set the color of the mean points to black
+  ) +
+  scale_color_manual(values = cols_treats) +
+  scale_y_continuous(
+    breaks = log2(1 / 2^(0:15)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.05), log2(0.9))
+  ) +
+  theme_bw() +
+  theme(
+    axis.title.x = element_text(size = 16),
+    axis.text.x = element_text(size = 12.5),
+    axis.title.y = element_text(size = 16), 
+    axis.text.y = element_text(size = 12.5)
+  )
+
+
+  
+### B caec
+
+
+```
+
+```{r}
+
+
+
+
+```
+
+```{r}
+#going to just focus on pre vs. post colitis (days 9. 17, 18) - no need to use any of the length corrected reads bc DESEQ2 works without length correction 
+#"Since tools for differential expression analysis are comparing the counts between sample groups for the same gene, gene length does not need to be accounted for by the tool. However, sequencing depth and RNA composition do need to be taken into account."
+
+#first join the metaphlan with metadata
+metadata3 <- read.csv("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/bulk_metadata.csv", header = TRUE)
+metadata3$filename <- paste0("B_", metadata3$filename)
+
+#factor levels 
+metadata3$Treatment <- factor(metadata2$Treatment, levels = c("control", "colitis"))
+
+
+joined_metaphlan_d <- left_join(joined_metaphlan, metadata3, by = "filename")
+
+
+#now subset for days 9, 17, 18 - NOTE DAY 9 = DAY = POST DSS 
+                                  # Day 17 = Day 8 Post-DSS 
+                                  # Day 18 = Day 9 Post-DSS 
+
+
+
+joined_metaphlan_d_subset <- joined_metaphlan_d[joined_metaphlan_d$Day == 9 | joined_metaphlan_d$Day == 17 | joined_metaphlan_d$Day == 18,]
+
+ 
+
+#now get into format for deseq 
+
+
+
+samtools_bulk_metaphlan <- joined_metaphlan_d_subset[, c("filename", "clade_name", "reads")]
+colnames(samtools_bulk_metaphlan) <- c("filename", "contigname", "reads")
+
+
+library(dplyr)
+library(tidyr)
+library(tidyverse)
+library(data.table)
+
+
+#use tiydrpivot wider 
+
+deseq_matrix_bulk_metaphlan <-  tidyr::pivot_wider(samtools_bulk_metaphlan, names_from = contigname, values_from = reads)
+deseq_matrix_bulk_metaphlan
+
+#round the counts 
+numeric_cols <- sapply(deseq_matrix_bulk_metaphlan, is.numeric)
+
+deseq_matrix_bulk_metaphlan[numeric_cols] <- lapply(deseq_matrix_bulk_metaphlan[numeric_cols], function(x) as.integer(round(x)))
+
+
+
+
+#switching the columns and rows so that each row is a different contig and each column is a different sample 
+switched_matrix_bulk_metaphlan <-  t(deseq_matrix_bulk_metaphlan)
+
+
+
+switched_matrix_bulk_metaphlan
+
+
+
+#export this 
+write.csv(switched_matrix_bulk_metaphlan, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/metaphlan/deseq2/switched_matrix.csv") 
+
+
+
+```
+
+```{r}
+
+```
+
+```{r}
+
+raw_counts2_bulk_metaphlan <- read.csv("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/metaphlan/deseq2/edited_switched_matrix.csv", check.names = FALSE)
+raw_counts2_bulk_metaphlan
+
+
+
+#Formatting the rawcount2_deseq2 transposed matrix 
+
+
+
+colnames(raw_counts2_bulk_metaphlan)[1] <- "contig_ID"
+
+raw_counts2_bulk_metaphlan
+
+
+#replace NA values with 0
+raw_counts2_bulk_metaphlan[is.na(raw_counts2_bulk_metaphlan)] = 0
+raw_counts2_bulk_metaphlan
+
+#naming that column "contig_ID"
+
+contig_ID_bulk_metaphlan <-  raw_counts2_bulk_metaphlan$contig_ID
+
+#Now I am generating a "sample index" so I can exclude "contig_ID" from our matrix 
+
+sample_index_bulk_metaphlan <- grepl("\\d", colnames(raw_counts2_bulk_metaphlan))
+##of the column names, anything that contains a numeric 
+
+
+#converting to a matrix and only including the sample index columns 
+raw_counts_bulk_metaphlan_matrix <- as.matrix(raw_counts2_bulk_metaphlan[,sample_index_bulk_metaphlan])
+raw_counts_bulk_metaphlan_matrix
+
+
+rownames(raw_counts_bulk_metaphlan_matrix) <- contig_ID_bulk_metaphlan
+
+head(raw_counts_bulk_metaphlan_matrix)
+
+
+
+
+
+```
+
+```{r}
+#reading in sample mapping file (coldata)
+sample_mapping_bulk_metaphlan <- read.csv("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/omm12_samtools/deseq2/sample_mapping_bulk_subset.csv", row.names = 1)
+
+
+# Assuming your data frame is called df
+rownames_list <- paste0("B_", rownames(sample_mapping_bulk_metaphlan))
+rownames(sample_mapping_bulk_metaphlan) <- rownames_list
+sample_mapping_bulk_metaphlan
+
+#changing all columns to factor 
+sample_mapping_bulk_metaphlan <- mutate_if(sample_mapping_bulk_metaphlan, is.character, as.factor)
+sample_mapping_bulk_metaphlan <- mutate_if(sample_mapping_bulk_metaphlan, is.integer, as.factor)
+sample_mapping_bulk_metaphlan
+```
+
+```{r}
+#note that the row.names dont have a column name - this is consistent with how coldata is shown in the deseq2 vignette 
+
+
+sample_mapping_bulk_metaphlan
+
+
+#Put the columns of the count data in the same order as rows names of the sample mapping, then make sure it worked (TRUE)
+
+length(colnames(raw_counts_bulk_metaphlan_matrix))
+length(rownames(sample_mapping_bulk_metaphlan))
+
+raw_counts_bulk_metaphlan_matrix <- raw_counts_bulk_metaphlan_matrix[, unique(rownames(sample_mapping_bulk_metaphlan))]
+
+
+all(colnames(raw_counts_bulk_metaphlan_matrix) == rownames(sample_mapping_bulk_metaphlan))
+
+sample_mapping_bulk_metaphlan
+
+
+
+
+```
+
+```{r}
+#starting the object construction with a simple design per vignette 
+
+
+deseq2Data_bulk_metaphlan <- DESeqDataSetFromMatrix(countData=raw_counts_bulk_metaphlan_matrix, colData=sample_mapping_bulk_metaphlan, design = ~ mouseID_n + Condition1)
+
+
+```
+
+
+```{r}
+#relevelling the condition and treatment variables so that the ref is pre-col -
+# relevelling the sample_mapping seems necessary, so that when we build the model.matrix, it contains the Treatment:Post_col values and not Treatment:Pre_col values 
+
+
+
+sample_mapping_bulk_metaphlan$Condition1  <-relevel(sample_mapping_bulk_metaphlan$Condition1, ref="pre_col")
+
+
+levels(sample_mapping_bulk_metaphlan$Condition1)
+
+
+
+#creating more complex design - controlling for cage, looking at nb
+
+
+mm_bulk_metaphlan <- model.matrix(~ Treatment + Treatment:mouseID_n + Treatment:Condition1, sample_mapping_bulk_metaphlan)
+mm_bulk_metaphlan
+
+
+
+#Running DESeq with the new model matrix 
+deseq2Data_bulk_metaphlan$Condition1 <- factor(deseq2Data_bulk_metaphlan$Condition1, levels = c("post_col", "pre_col"))
+
+
+
+
+deseq2Data_bulk_metaphlan = DESeq(deseq2Data_bulk_metaphlan, full = mm_bulk_metaphlan, betaPrior = FALSE)
+
+```
+
+```{r}
+deseq2_results_bulk_metaphlan <-  results(deseq2Data_bulk_metaphlan, contrast=list("Treatmentcolitis.Condition1post_col","Treatmentcontrol.Condition1post_col"))
+
+
+
+deseq2_results_bulk_metaphlan <- as.data.frame(deseq2_results_bulk_metaphlan)
+
+deseq2_results_bulk_metaphlan <- deseq2_results_bulk_metaphlan %>% 
+rownames_to_column(var = "contigname")
+deseq2_results_bulk_metaphlan
+
+
+
+
+#remove leading spaces 
+deseq2_results_bulk_metaphlan$contigname <- trimws(deseq2_results_bulk_metaphlan$contigname, "left")
+
+
+
+
+#significant values 
+
+deseq2_results_bulk_metaphlan_sig <- subset(deseq2_results_bulk_metaphlan, padj < 0.05 & (log2FoldChange > 1 | log2FoldChange < -1) )
+
+
+deseq2_results_bulk_metaphlan_sig <- as.data.frame(deseq2_results_bulk_metaphlan_sig)
+deseq2_results_bulk_metaphlan_sig
+
+```
+```{r}
+
+deseq2_results_bulk_metaphlan1 <- deseq2_results_bulk_metaphlan
+deseq2_results_bulk_metaphlan1$pvalue <- deseq2_results_bulk_metaphlan1$padj
+
+
+keyvals_col_con_bulk_metaphlan <- ifelse(
+    deseq2_results_bulk_metaphlan1$log2FoldChange < -1 & deseq2_results_bulk_metaphlan1$padj < 0.05, 'blue',
+      ifelse(deseq2_results_bulk_metaphlan1$log2FoldChange > 1 & deseq2_results_bulk_metaphlan1$padj < 0.05, 'red',
+        'light grey'))
+  keyvals_col_con_bulk_metaphlan[is.na(keyvals_col_con_bulk_metaphlan)] <- 'light grey'
+  names(keyvals_col_con_bulk_metaphlan)[keyvals_col_con_bulk_metaphlan == 'red'] <- 'Over-Abundant in Colitis Group'
+  names(keyvals_col_con_bulk_metaphlan)[keyvals_col_con_bulk_metaphlan == 'light grey'] <- 'Non-significant'
+  names(keyvals_col_con_bulk_metaphlan)[keyvals_col_con_bulk_metaphlan == 'blue'] <- 'Over-Abundant in Control Group'
+
+EV_col_con_bulk_metaphlan <- EnhancedVolcano(deseq2_results_bulk_metaphlan1, lab=NA , x = 'log2FoldChange',
+    y = 'pvalue',  pCutoff = 0.05, cutoffLineWidth = 0.1, selectLab = rownames(deseq2_results_bulk_metaphlan1)[which(names(keyvals_col_con_bulk_metaphlan) %in% c('Over-Abundant in Colitis', 'Over-Abundant in Control'))], pointSize = 2, gridlines.major = FALSE, gridlines.minor = FALSE, colCustom = keyvals_col_con_bulk_metaphlan,  legendPosition = 'right', legendLabSize = 12,legendIconSize = 4.0, title = "", axisLabSize = 15,    subtitle = "", caption = ""
+)
+
+EV_col_con_bulk_metaphlan
+
+
+
+
+```
+
+
+
+```{r}
+# Create a custom shape for a circle
+circle <- data.frame(x = 0, y = 0)
+
+# Change Clostridium_butyricum to Clostridium innocuum and pseudococcoides to coccoides 
+old_names <- c("Blautia_pseudococcoides", "Clostridium_butyricum")
+new_names <- c("Blautia_coccoides ", "Clostridium_innocuum")
+
+
+
+
+
+
+# Use mutate and case_when to change specific values
+deseq2_results_bulk_metaphlan <- deseq2_results_bulk_metaphlan %>%
+  mutate(contigname = case_when(
+    contigname %in% old_names ~ new_names[match(contigname, old_names)],
+    TRUE ~ contigname
+  ))
+deseq2_results_bulk_metaphlan
+
+deseq2_results_bulk_metaphlan$contigname <- str_replace_all(deseq2_results_bulk_metaphlan$contigname, "_", " ")
+
+
+#modifying taxa names 
+
+
+
+
+deseq2_results_bulk_metaphlan <- deseq2_results_bulk_metaphlan[deseq2_results_bulk_metaphlan$contigname != "Turicibacter sp TS3",]
+
+
+
+
+deseq2_results_bulk_metaphlan$contigname <- str_replace_all(deseq2_results_bulk_metaphlan$contigname, "_", " ")
+
+library(dplyr)
+library(ggplot2)
+
+library(ggplot2)
+
+library(ggplot2)
+
+library(ggplot2)
+
+library(ggplot2)
+
+deseq2_results_bulk_metaphlan %>%
+  ggplot(aes(x = log2FoldChange, y = reorder(contigname, -log2FoldChange))) +
+  geom_vline(xintercept = 0) +
+  geom_point(
+    aes(
+      x = log2FoldChange, 
+      y = reorder(contigname, -log2FoldChange),
+      color = ifelse(padj < 0.05 & log2FoldChange > 1, "red", 
+                     ifelse(padj < 0.05 & log2FoldChange < -1, "blue", "grey"))
+    ),
+    size = 5
+  ) +
+  scale_color_identity() +
+  theme_bw() +
+  theme(
+    axis.text.y = element_text(size = 18, face = "italic", color = "black"),  
+    axis.text.x = element_text(size = 18, color = "black"), 
+    axis.title.x = element_text(size = 20),
+    legend.position = "none"
+  ) +
+  labs(x = expression(Log[2]~"Fold-Change"))
+
+
+
+
+```
+
+
+
