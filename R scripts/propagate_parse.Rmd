@@ -1,0 +1,89 @@
+---
+title: "Untitled"
+author: "Anshul Sinha"
+date: '2023-12-05'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+
+
+```{r}
+#propagate 
+prop_output <- read.table("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/propagate_edit/propagate_output/concatenated_prop_output.tsv", header = TRUE, sep = "\t")
+
+# Remove the ".tsv" extension from the 'filename' column
+prop_output$filename <- gsub(".tsv", "", prop_output$filename)
+prop_output
+
+# Function to remove everything after and including the 3rd underscore
+remove_after_third_underscore <- function(x) {
+  sub("^((?:[^_]*_){2}[^_]*)_.*", "\\1", x)
+}
+
+prop_output$filename <- sapply(prop_output$filename , remove_after_third_underscore)
+
+
+#metadata
+bulk_metadata <- read.csv("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/bulk_metadata.csv", header = TRUE)
+#give everything in the filename a B_ before 
+bulk_metadata$filename <- paste0("B_", bulk_metadata$filename)
+
+prop_output_1 <- left_join(prop_output, bulk_metadata, by = "filename")
+
+
+
+
+#prophage mapper 
+prophage_mapper <- read.table("/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/prophages_assemblies/propagate/annotated_prophages_list.txt", header = TRUE, sep= "\t")
+
+
+prop_output_joined <- left_join(prop_output_1, prophage_mapper, by = "prophage")
+
+
+
+
+prop_output_joined_lb <- prop_output_joined[complete.cases(prop_output_joined$species), ]
+
+prop_output_amboise <- prop_output_joined_lb[prop_output_joined_lb$species == "Amboise",]
+sort(prop_output_amboise$prophage.host_ratio)
+
+
+prop_output_amboise_edit <- prop_output_amboise
+
+prop_output_amboise_edit <- prop_output_amboise_edit %>%
+  select(filename, Mouse, Day, prophage_mean_cov,prophage.host_ratio)
+
+write.csv(prop_output_amboise_edit, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/omm-12/OMM12_DSS_2.0_10_23/seq_analyses/BULK/propagate_edit/amboise/prop_output_amboise.csv")
+
+prop_output_villandry <- prop_output_joined_lb[prop_output_joined_lb$species == "Villandry",]
+sort(prop_output_villandry$prophage.host_ratio)
+
+
+prop_output_castelnaud <- prop_output_joined_lb[prop_output_joined_lb$species == "Castelnaud",]
+sort(prop_output_castelnaud$prophage.host_ratio)
+
+
+
+prop_output_saumur <- prop_output_joined_lb[prop_output_joined_lb$species == "Saumur",]
+sort(prop_output_saumur$prophage.host_ratio)
+
+
+prop_output_maintenon <- prop_output_joined_lb[prop_output_joined_lb$species == "Maintenon",]
+sort(prop_output_maintenon$prophage.host_ratio)
+
+prop_output_versailles <- prop_output_joined_lb[prop_output_joined_lb$species == "Versailles",]
+sort(prop_output_versailles$prophage.host_ratio)
+
+
+```
+
+```{r}
+
+
+
+```
+
