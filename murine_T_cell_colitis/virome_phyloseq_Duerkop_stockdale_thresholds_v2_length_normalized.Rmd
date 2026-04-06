@@ -1,0 +1,3753 @@
+---
+title: "Untitled"
+author: "Anshul Sinha"
+date: '2023-09-07'
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+#knitr::opts_chunk$set(fig.width=80, fig.height=43) 
+```
+
+
+```{r}
+library(dplyr)
+#devtools::install_github("gmteunisse/fantaxtic")
+
+
+```
+
+
+```{r}
+library(phyloseq)
+library(dplyr)
+library(tidyverse)
+library(microshades)
+library(dplyr)
+library(speedyseq)
+library(forcats)
+library(tidyverse)
+library(microshades)
+library(ggside)
+library(UpSetR)
+```
+
+
+
+
+```{r}
+#read in bacphlip output 
+
+bacphlip_duerkop <- read.table("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/bacphlip/dereplicated_phages_bp.txt", header = TRUE)
+bacphlip_duerkop
+
+#Setting a binary column 
+
+bacphlip_duerkop$Lifestyle <- ifelse(bacphlip_duerkop$Temperate > 0.5, "Temperate", "Virulent")
+bacphlip_duerkop
+
+
+#Setting first column name = "contigname"
+
+bacphlip_duerkop <- rownames_to_column(bacphlip_duerkop, var = "contigname")
+
+#what percentage of contigs are temperate 
+
+table(bacphlip_duerkop$Lifestyle)
+
+```
+
+
+
+
+
+
+
+```{r}
+library(dplyr)
+library(data.table)
+library(tidyr)
+
+
+#read in iPHOP
+  iphop_duerkop_virome <- read.csv("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/iphop/Host_prediction_to_genome_m90.csv", sep = ',')
+
+#Turn this into a data table 
+
+iphop_duerkop_virome <-as.data.table(iphop_duerkop_virome)
+
+iphop_duerkop_virome
+#iPhoP gives several outputs for each contig - filter to give the highest confidence 
+
+
+iphop_duerkop_virome <- iphop_duerkop_virome %>%
+  group_by(Virus) %>%
+  dplyr::slice(which.max(Confidence.score))
+
+
+
+#Separate taxonomic levels 
+iphop_duerkop_virome <-  iphop_duerkop_virome %>% 
+  separate(Host.taxonomy, into = c("Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"), sep = ";")
+iphop_duerkop_virome
+
+names(iphop_duerkop_virome)[1] <- "contigname"
+iphop_duerkop_virome
+
+
+
+
+iphop_duerkop_virome <- iphop_duerkop_virome %>%
+    mutate(Phylum = recode(Phylum, p__Firmicutes_A = 'p__Firmicutes', p__Firmicutes_B = 'p__Firmicutes', p__Firmicutes_C = 'p__Firmicutes'))
+iphop_duerkop_virome
+
+
+length(unique(iphop_duerkop_virome$Family))
+table(iphop_duerkop_virome$Family)
+
+iphop_duerkop_virome
+
+
+
+
+```
+
+
+
+
+
+```{r}
+#read in sam tools coverage file 
+
+#NOTE - This samtools contigs dereplicated contigs across ALL mice (rather than bowtie alignments to each co-assembly separately)
+
+
+sam_tools_cov <- read.table("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/samtools/combined_sam_tools.tsv", header = FALSE, sep = "\t")
+
+colnames(sam_tools_cov) <- c("contig_name_filename", "startpos", "endpos", "numreads", "covbases", "coverage",  "meandepth", "meanbaseq", "meanmapq")
+sam_tools_cov
+
+
+
+# Split column by comma
+df_split <- strsplit(sam_tools_cov$contig_name_filename, ":")
+
+
+
+# Create new columns for each split part
+sam_tools_cov$filename <- sapply(df_split, "[[", 1)
+sam_tools_cov$contigname <- sapply(df_split, "[[", 2)
+
+
+
+#remove unecessary part of filename 
+sam_tools_cov$filename  <- substr(sam_tools_cov$filename, 1, nchar(sam_tools_cov$filename) - 14)
+
+
+sam_tools_cov_test <- sam_tools_cov[sam_tools_cov$filename == "V_669_T_42",]
+
+#2,574 hits before cutoff 
+
+
+
+
+
+
+#first have to read in the checkV ouput for contig length 
+checkV <- read.table("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/checkV/quality_summary.tsv", sep = "\t", header = TRUE)
+checkV_test <- checkV[checkV$completeness > 50,]
+checkV_test <- checkV_test[!is.na(checkV_test$completeness), ]
+
+checkV <- checkV  %>%
+  select(contig_id, contig_length)
+
+
+colnames(checkV) <- c("contigname", "contig_length")
+
+
+#remove leading spaces 
+sam_tools_cov$contigname <- trimws(sam_tools_cov$contigname, "left")
+checkV$contigname <- trimws(checkV$contigname, "left")
+
+
+#remove trailing spaces 
+
+checkV$contigname <- trimws(checkV$contigname, "left")
+
+
+sam_tools_cov <- left_join(sam_tools_cov, checkV, by= "contigname")
+
+
+
+#Stockdale cuttoffs 
+
+sam_tools_cov <- sam_tools_cov[sam_tools_cov$numreads > 10,]
+sam_tools_cov <- sam_tools_cov[sam_tools_cov$numreads > 10,]
+
+#subset based on contig length
+# calculated breadth of coverage for Bowtie2 mapped reads spanned 50% of contigs <5kb, 30% of contigs ≥5kb and <20kb, or 10% of contigs ≥20kb59,60.
+
+
+#<5kb
+sam_tools_cov_5 <- sam_tools_cov[sam_tools_cov$contig_length < 5000,]
+#306 entries before cutoff
+sam_tools_cov_5 <- sam_tools_cov_5[sam_tools_cov_5$coverage > 50,]
+#289 after 
+
+
+
+
+
+#between 5 and 20
+sam_tools_cov_5_20_1 <- sam_tools_cov[sam_tools_cov$contig_length >= 5000 ,]
+sam_tools_cov_5_20_2 <- sam_tools_cov_5_20_1[sam_tools_cov_5_20_1$contig_length < 20000,]
+#396 before 
+
+ sam_tools_cov_5_20_2 <- sam_tools_cov_5_20_2[sam_tools_cov_5_20_2$coverage > 30,]
+
+ #389 after 
+ 
+ 
+#Above 20 
+ 
+ #1,872 before 
+ sam_tools_cov_20 <- sam_tools_cov[sam_tools_cov$contig_length >= 20000,]
+sam_tools_cov_20 <- sam_tools_cov_20[sam_tools_cov_20$coverage > 10,]
+
+
+#1872 after 
+sam_tools_cov <- rbind(sam_tools_cov_5, sam_tools_cov_5_20_2, sam_tools_cov_20 )
+
+
+
+#2,550 after (compared to 2,213 using 75% coverage threshold)
+
+#143 unique contigs, which 
+length(unique(sam_tools_cov$contigname))
+
+sam_tools_cov
+#write.csv(sam_tools_cov, "/Users/anshul.sinha/Desktop/test2.csv")
+checkV_test
+sam_tools_cov
+# unique values in each
+u1 <- unique(checkV_test$contig_id)
+u2 <- unique(sam_tools_cov$contigname)
+intersect(u1, u2)
+
+#sanity check: 667_k79_25742_flag=0_multi=79.9467_len=29725
+sam_tools_cov_test667 <-sam_tools_cov[sam_tools_cov$contigname == "667_k79_25742_flag=0_multi=79.9467_len=29725",]
+sam_tools_cov_test666 <-sam_tools_cov[sam_tools_cov$contigname == "666_k79_89027_flag=0_multi=15.9913_len=67680",]
+sam_tools_cov_test663 <-sam_tools_cov[sam_tools_cov$contigname == "663_k79_333932_flag=1_multi=13.6823_len=4417",]
+
+sam_tools_cov_test669 <-sam_tools_cov[sam_tools_cov$contigname == "669_k79_13623_flag=0_multi=30.9810_len=63386",]
+sam_tools_cov_test669 <-sam_tools_cov[sam_tools_cov$contigname == "667_k79_50847_flag=0_multi=31.9963_len=167348",]
+
+#663_k79_333932_flag=1_multi=13.6823_len=44
+```
+
+
+
+
+```{r}
+#calculating the mean coverage for each sample 
+#use the mean depth column to do that 
+
+#step 1
+  # For each sample, sum the meandepth 
+
+
+
+ df_sum <- sam_tools_cov %>%
+    group_by(filename) %>%
+    summarise(mean_depth_sum = sum(meandepth))
+
+  
+  # Join summed values to original data
+  sam_tools_cov_calc_1 <- left_join(sam_tools_cov, df_sum, by = "filename")
+  sam_tools_cov_calc_1
+  
+  
+  #step 2 create a new column to calculate relative abundance
+  
+  sam_tools_cov_calc <- sam_tools_cov_calc_1
+  sam_tools_cov_calc$relabundance <- sam_tools_cov_calc$meandepth/ sam_tools_cov_calc$mean_depth_sum
+  sam_tools_cov_calc 
+  
+  
+  
+  #sam 
+  #write.csv(sam_tools_cov_calc, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome/samtoolscalccov.csv")
+  
+```
+
+```{r}
+
+#join dfs and remove and leading and trailing spaces to ensure join
+
+#remove leading spaces 
+sam_tools_cov_calc$contigname <- trimws(sam_tools_cov_calc$contigname, "left")
+bacphlip_duerkop$contigname <- trimws(bacphlip_duerkop$contigname, "left")
+
+
+#remove trailing spaces 
+
+sam_tools_cov_calc$contigname <- trimws(sam_tools_cov_calc$contigname, "left")
+bacphlip_duerkop$contigname <- trimws(bacphlip_duerkop$contigname, "left")
+
+
+
+combined_virome_df_1 <- left_join(sam_tools_cov_calc,bacphlip_duerkop, by = "contigname")
+
+combined_virome_df_1
+
+
+#combine with metadata
+
+
+metadata <- read.csv("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome/metadata.csv", sep = ",")
+
+combined_virome_df_1 <- left_join(combined_virome_df_1,metadata, by = "filename")
+combined_virome_df_1
+
+
+#combine with iPHOP
+
+
+combined_virome_df_1 <- left_join(combined_virome_df_1,iphop_duerkop_virome, by = "contigname")
+combined_virome_df_1
+combined_virome_df_1 <- as.data.frame(combined_virome_df_1)
+
+write.csv(combined_virome_df_1, "/Users/anshulsinha/Desktop/test2.csv")
+
+
+
+#subset 
+
+
+
+combined_virome_df_1_temperate <- combined_virome_df_1[combined_virome_df_1$Lifestyle == 'Temperate',]
+combined_virome_df_1_virulent <- combined_virome_df_1[combined_virome_df_1$Lifestyle == 'Virulent',]
+
+combined_virome_df_1_colitis <- combined_virome_df_1[combined_virome_df_1$treatment == 'colitis',]
+combined_virome_df_1_colitis_temperate <- combined_virome_df_1_colitis[combined_virome_df_1_colitis$Lifestyle == 'Temperate',]
+combined_virome_df_1_colitis_virulent <- combined_virome_df_1_colitis[combined_virome_df_1_colitis$Lifestyle == 'Virulent',]
+
+
+                                                     
+combined_virome_df_1_control <- combined_virome_df_1[combined_virome_df_1$treatment == 'control',]
+combined_virome_df_1_control_temperate <- combined_virome_df_1_control[combined_virome_df_1_control$Lifestyle == 'Temperate',]
+combined_virome_df_1_control_virulent <- combined_virome_df_1_control[combined_virome_df_1_control$Lifestyle == 'Virulent',]
+                                    
+
+
+
+
+
+
+
+
+
+
+
+```
+
+```{r}
+library(phyloseq)
+library(dplyr)
+
+#Creating a function that converts the samtools outputs to a matrix that can be used by Phyloseq 
+#option to choose "meandepth" (length normalized read counts) or raw read counts "numreads"
+
+ps_otu_tab_maker <- function(sam_tools_output, reads) {
+  
+  
+  
+  #read in and select necessary columns for ps 
+  
+sam_tools_output_1 <- sam_tools_output %>%
+  select(filename, contigname, reads)
+sam_tools_output_1
+
+
+
+
+if(reads == "meandepth") {
+sam_tools_output_1$meandepth <- round(sam_tools_output_1$meandepth, 0)
+}  
+  else
+{sam_tools_output_1$numreads <- round(sam_tools_output_1$numreads, 0)
+
+}  
+
+
+
+
+
+
+
+#round the decimals - necssary for ps 
+#sam_tools_output_1$meandepth <- round(sam_tools_output_1$meandepth, 0)
+
+#sam_tools_output_1
+
+
+# turn this into a correct format for ps 
+
+
+sam_tools_output_2 <- sam_tools_output_1 %>%
+                 pivot_wider(names_from = filename, values_from = reads)
+
+#replace nas in the df with 0 
+
+sam_tools_output_2[is.na(sam_tools_output_2)] = 0
+#sam_tools_output_2
+
+#make the contig column the rownames
+ sam_tools_output_3 <- sam_tools_output_2 %>%
+  tibble::column_to_rownames("contigname") 
+ 
+# Convert to matrix
+
+sam_tools_matrix <- as.matrix(sam_tools_output_3)
+ sam_tools_matrix
+
+
+}
+
+
+ps_otu_reads <- ps_otu_tab_maker(combined_virome_df_1, reads = "meandepth")
+ps_otu_reads_temp <- ps_otu_tab_maker(combined_virome_df_1_temperate, reads = "meandepth")
+ps_otu_reads_vir <- ps_otu_tab_maker(combined_virome_df_1_virulent, reads = "meandepth")
+
+ps_otu_reads_temp2 <- ps_otu_tab_maker(combined_virome_df_1_temperate, reads = "numreads")
+
+#sanity check the sam tools input and reads df match 
+
+as.data.frame(ps_otu_reads)
+sam_tools_cov
+
+
+#subset a contig 
+sam_tools_cov_test_197 <- sam_tools_cov[sam_tools_cov$contigname == "663_k79_197072_flag=1_multi=12.6452_len=4543",]
+sam_tools_cov_test_100489 <- sam_tools_cov[sam_tools_cov$contigname == "666_k79_100489_flag=0_multi=140.5548_len=3444",]
+
+as.data.frame(ps_otu_reads)
+sam_tools_cov_test_100489
+sam_tools_cov_test_197
+```
+
+```{r}
+#now work on taxonomy for phyloseq - need the same rownames as the abundance (contigname on the x-axis)
+
+#There are two taxonomy tables I need to create depending on the phyloseq objects I create. Due to limitations in MicroViz, I cant include the IPhoP and BacPhlip Taxonomy info in the same PS object (makes visualization difficult)
+
+#For 3 PS objects (whole virome, temperate, virulent) I'll use the IPhoP taxonomy
+# For the 1 PS object where I compare Virulent and Temperate phage rel abundance/diversity, I'll use the bacphlip taxonomy
+
+
+
+
+
+#IPHoP only includes the contigs with hits, so I need to first include all contigs by making a list of them using the bacphlip df then left join with the iPHoP df
+
+
+free_vir_names <- bacphlip_duerkop %>%
+  select(contigname)
+free_vir_names
+
+free_vir_names_1 <- left_join(free_vir_names, iphop_duerkop_virome, by="contigname")
+
+#also add in the bacphlip info here...  will be useful to include in phyloseq
+
+free_vir_taxa <- left_join(free_vir_names_1, bacphlip_duerkop, by="contigname")
+
+
+
+# remove uncessary columns: For IPhop taxa only phyloseq object 
+
+free_vir_taxa_iphop_only <- select(free_vir_taxa, -c("Main.method","Confidence.score", "Additional.methods", "Virulent", "Temperate", "Lifestyle", "Host.genome"))
+free_vir_taxa_iphop_only2 <- select(free_vir_taxa, -c("Main.method","Confidence.score", "Additional.methods", "Virulent", "Temperate", "Lifestyle", "Host.genome"))
+free_vir_taxa_iphop_only <- free_vir_taxa_iphop_only %>% 
+tibble::column_to_rownames("contigname")
+
+free_vir_taxa_iphop_only <- as.matrix(free_vir_taxa_iphop_only)
+
+
+#how many vOTUs have a family level designation: 
+
+free_vir_taxa_iphop_only2
+sum(!is.na(free_vir_taxa_iphop_only2$Family)) #84 
+
+
+
+
+# remove uncessary columns: For lifestyle info  phyloseq object (see below) - removing all IPhoP taxonomy 
+
+
+
+free_vir_taxa_bacphlip_only <- select(free_vir_taxa, -c("Main.method","Confidence.score", "Additional.methods", "Virulent", "Temperate", "Host.genome", "Kingdom", "Phylum", "Class", "Order", "Family", "Genus", "Species"))
+
+free_vir_taxa_bacphlip_only <- free_vir_taxa_bacphlip_only %>% 
+tibble::column_to_rownames("contigname")
+
+free_vir_taxa_bacphlip_only <- as.matrix(free_vir_taxa_bacphlip_only)
+
+
+
+
+
+
+bacphlip_duerkop
+free_vir_taxa_iphop_only2
+
+#See how many virulent have NA taxonomy vs. Temperate 
+
+test_lifestyle <- left_join(bacphlip_duerkop, free_vir_taxa_iphop_only2, by ="contigname")
+test_lifestyle_vir = test_lifestyle[test_lifestyle$Lifestyle == "Virulent",]
+table(test_lifestyle_vir$Family, useNA = "always")
+#56.2 of virulent vOTUs are NA
+
+test_lifestyle_temp  = test_lifestyle[test_lifestyle$Lifestyle == "Temperate",]
+table(test_lifestyle_temp$Family, useNA = "always")
+
+#29.6% of Temperate vOTUs are NA
+
+
+
+```
+
+
+```{r}
+#format the metadata
+metadata_duerkop <- read.csv("/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome/metadata.csv")
+
+
+#Before Creating PS Object, change factor levels 
+metadata_duerkop$day <- factor(metadata_duerkop$day, levels = c(0,14,42))
+metadata_duerkop$treatment <- factor(metadata_duerkop$treatment, levels = c("control", "colitis"))
+
+
+
+
+
+```
+
+
+
+```{r}
+
+#1st Phyloseq Object 
+#Comparing the whole virome- with IPhoP taxonomy 
+
+
+library("phyloseq")
+OTU_D1 = otu_table(ps_otu_reads, taxa_are_rows = TRUE)
+TAX_D1 = tax_table(free_vir_taxa_iphop_only)
+META_D1 <- sample_data(metadata_duerkop)
+
+
+META_D1
+
+
+sample_names(META_D1) <- metadata_duerkop$filename
+PS_D1 = phyloseq(OTU_D1, TAX_D1, META_D1)
+
+
+PS_D1
+sample_sums(PS_D1)
+
+
+META_D2 <- sample_data(metadata_duerkop)
+
+```
+
+```{r}
+#finding easier to make nice plots outside of phyloseq 
+
+
+library(vegan)
+ps_melt_ps1 <- psmelt(PS_D1)
+
+ps1_colitis <- subset_samples(PS_D1, treatment == "colitis" )
+ps_melt_ps1_colitis <- psmelt(ps1_colitis)
+
+ps1_control <- subset_samples(PS_D1, treatment == "control" )
+ps_melt_ps1_control <- psmelt(ps1_control)
+
+
+#san test 
+
+ps_melt_ps1_test <- ps_melt_ps1[ps_melt_ps1$OTU == "667_k79_25742_flag=0_multi=79.9467_len=29725",]
+
+
+```
+
+```{r}
+
+#tax_glom the PS1 for eventual export to 
+PS_1_famglom <- tax_glom(PS_D1, taxrank="Family", NArm = TRUE) 
+sample_sums(PS_D1)
+
+sample_sums(PS_1_famglom)
+ps_melt_ps1_fam <- psmelt(PS_1_famglom)
+
+#write.csv(ps_melt_ps1_fam, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/deseq2/pbfs/counts_fam.csv")
+
+
+```
+```{r}
+#11_2025 - 1) calculate Bray Diversity for the whole virome 
+#But first: assess sequencing depth saturation 
+
+
+PS_D1
+
+#Generate Rarefaction Curve 
+
+otu_mat_duerkop.vir.whole <- as(otu_table(PS_D1), "matrix")
+if (taxa_are_rows(PS_D1)) {
+  otu_mat_duerkop.vir.whole <- t(otu_mat_duerkop.vir.whole)
+}
+
+# vegan's rarecurve function
+rarecurve_list_duerkop.vir.whole <- vegan::rarecurve(
+  otu_mat_duerkop.vir.whole,
+  step = 20,
+  label = FALSE
+)
+
+
+library(phyloseq
+        )
+
+ps_melt_virome_vir_D1 <-  psmelt(PS_D1) 
+
+
+
+
+ ps_melt_virome_vir_D1.goods <- ps_melt_virome_vir_D1 %>% 
+  group_by(Sample) %>%
+  summarise(nseqs= sum(Abundance),
+            n_singletons = sum(Abundance == 1), 
+            goods = 100*(1- n_singletons/nseqs)) 
+
+goods.plot.viromevir.whole <- ps_melt_virome_vir_D1.goods %>% 
+  ggplot(aes(x = nseqs, y = goods)) +
+  geom_point() +
+  scale_y_continuous(limits = c(0, 100))
+
+goods.data.virome.vir.d.whole <- na.omit(ps_melt_virome_vir_D1.goods)
+
+mean(goods.data.virome.vir.d.whole$goods) #98.36
+median(goods.data.virome.vir.d.whole$goods) #100 - and high Good's 
+min(goods.data.virome.vir.d.whole$goods) #92.33
+
+#Generally pretty good sequencing saturation - 668 42 is around 92, but most are higher than 96
+
+
+
+
+
+
+```
+
+```{r}
+#Let's generate Bray Distance - Whole Virome 
+library(phyloseq)
+
+
+ps_rel_ps1_duerkop <- transform_sample_counts(PS_D1, function(x) x / sum(x))
+
+ps1_0_rel <- subset_samples(ps_rel_ps1_duerkop, day == "0" )
+ps1_14_rel <- subset_samples(ps_rel_ps1_duerkop, day == "14" )
+ps1_42_rel <- subset_samples(ps_rel_ps1_duerkop, day == "42" )
+
+
+
+#Create Bray Matrices for Each 
+
+bray_dist_0_rel_whole <- phyloseq::distance(ps1_0_rel, method = "bray")
+bray_dist_14_rel_whole <- phyloseq::distance(ps1_14_rel, method = "bray")
+bray_dist_42_rel_whole <- phyloseq::distance(ps1_42_rel, method = "bray")
+
+
+write.csv(as.matrix(bray_dist_0_rel_whole), "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/diversity_11_13_25/whole_vir/w0.csv")
+write.csv(as.matrix(bray_dist_14_rel_whole), "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/diversity_11_13_25/whole_vir/w14.csv")
+write.csv(as.matrix(bray_dist_42_rel_whole), "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/diversity_11_13_25/whole_vir/w42.csv")
+
+
+
+
+```
+
+```{r}
+#Look at Diversity of Whole Virome with PCoA and PERMANOVAs
+
+
+
+ps1_colitis <- subset_samples(ps_rel_ps1_duerkop, treatment == "colitis" )
+ps1_control <- subset_samples(ps_rel_ps1_duerkop, treatment == "control" )
+
+
+
+#How do the colitis group change over time? 
+
+bray_dist_colitis_whole_vir <-  phyloseq::distance(ps1_colitis, method = "bray")
+meta_colitis_whole_vir <- as(sample_data(ps1_colitis), "data.frame")
+meta_colitis_whole_vir$day <- as.factor(meta_colitis_whole_vir$day)
+meta_colitis_whole_vir$mouseID <- as.factor(meta_colitis_whole_vir$mouseID)
+meta_colitis_whole_vir$treatment <- as.factor(meta_colitis_whole_vir$treatment)
+
+all(rownames(as.matrix(bray_dist_colitis_whole_vir)) == rownames(meta_colitis_whole_vir))
+class(bray_dist_colitis_whole_vir)
+
+colitis_block_whole_virome <- with(meta_colitis_whole_vir, how(nperm = 999, blocks = mouseID))
+adonis2(bray_dist_colitis_whole_vir ~ day, data = meta_colitis_whole_vir, permutations = colitis_block_whole_virome)
+
+#How do the control group change over time? 
+
+
+bray_dist_control_whole_vir <-  phyloseq::distance(ps1_control, method = "bray")
+meta_control_whole_vir <- as(sample_data(ps1_control), "data.frame")
+meta_control_whole_vir$day <- as.factor(meta_control_whole_vir$day)
+meta_control_whole_vir$mouseID <- as.factor(meta_control_whole_vir$mouseID)
+meta_control_whole_vir$treatment <- as.factor(meta_control_whole_vir$treatment)
+
+all(rownames(as.matrix(bray_dist_control_whole_vir)) == rownames(meta_control_whole_vir))
+
+
+control_block_whole_virome <- with(meta_control_whole_vir, how(nperm = 999, blocks = mouseID))
+adonis2(bray_dist_control_whole_vir ~ meta_control_whole_vir$day, data = meta_control_whole_vir, permutations = control_block_whole_virome) #p=0.083 r-squared=0.41
+meta_control_whole_vir
+
+
+```
+
+
+
+
+
+```{r}
+
+```
+
+```{r}
+
+
+
+
+
+```
+
+
+
+
+```{r}
+  
+```
+
+
+
+```{r}
+ps1_0 <- subset_samples(PS_D1, day == "0" )
+ps1_14 <- subset_samples(PS_D1, day == "14" )
+ps1_42 <- subset_samples(PS_D1, day == "42" )
+
+
+```
+
+```{r}
+
+
+#FOR AITCHISON'S DISTANCE
+
+PCA_comp_fun <- function(ps, tax_glom, phyrank, group_var) {
+
+  
+  #Conditional statement to deal with whether we want to agglomerate or not 
+  #Since we have to use the tax_transform argument, the conditional statement will have to add a few more things 
+  # the rank argument doesnthadnle the "NA rank well" 
+  #Even though we agglomerated, we'll need to include this here, so the plot_taxa labels show up here
+  
+  execpart <- tax_glom
+
+if(execpart) {
+ps1 <- tax_glom(ps, taxrank=phyrank, NArm = TRUE) 
+
+fixed_taxa <- ps1 %>%
+ tax_fix(unknowns = "NA")
+
+#I have to add the "rank" here so that labels will show up on the tax plot
+fixed_taxa_transformed <- fixed_taxa  %>%
+  tax_transform("clr", rank = phyrank) 
+
+}  
+  else
+{ ps1 <- ps
+
+fixed_taxa <- ps1 %>%
+ tax_fix(unknowns = "NA")
+
+#I have to add the "rank" here so that labels will show up on the tax plot
+fixed_taxa_transformed <- fixed_taxa  %>%
+  tax_transform("clr") 
+  }  
+
+  
+#no distance calculation needed for the PCA - uses the CLR-transformed microbial variables directly 
+#PCA 
+tax_transform_relab_ps1_ord <- fixed_taxa_transformed  %>% 
+  ord_calc("PCA") 
+
+
+#ord_explore(tax_transform_relab_ps1_ord)
+ ord_plot(tax_transform_relab_ps1_ord, color = group_var, shape = "day", size = 2, interactive = TRUE) +   scale_colour_brewer(palette = "Dark2")
+}
+
+
+
+
+
+#FUNCTION TO CALCULATE PERMANOVA on CLR-TRANSFORMED AITCHISON DISTANCE 
+#same arguments as above, group_var for permanova variable to test 
+
+
+
+PCA_comp_fun_perm_aitch <- function(ps, tax_glom, phyrank, group_var) {
+  
+  #same  steps as above for 
+ execpart <- tax_glom
+if(execpart) {
+ps1 <- tax_glom(ps, taxrank=phyrank, NArm = TRUE) 
+
+fixed_taxa <- ps1 %>%
+ tax_fix(unknowns = "NA")
+
+
+
+}  
+  else
+{ ps1 <- ps
+
+fixed_taxa <- ps1 %>%
+ tax_fix(unknowns = "NA")
+
+}  
+ 
+ #calculate aitchison distance - NOte that unlike the PCA, we are not transforming counts using CLR- see the dist_calc notes, but im guessing that the dist_calc does this itself 
+ aitchison_dists <- fixed_taxa %>%
+  dist_calc("aitchison")
+
+ aitchison_perm <- aitchison_dists %>%
+  dist_permanova(
+    seed = 1234, # for set.seed to ensure reproducibility of random process
+    n_processes = 1, n_perms = 999, # you should use at least 999!
+    variables = group_var
+  )
+ 
+ perm_get(aitchison_perm) %>% as.data.frame()
+
+}
+```
+
+
+
+
+
+```{r}
+
+library(phyloseq)
+library(vegan)
+
+##Bray Curtis PcoA####
+
+
+bray_dist_whole_vir <- phyloseq::distance(ps_rel_ps1_duerkop, method = "bray")
+pcoa_res_whole_vir <- ordinate(ps_rel_ps1_duerkop, method = "PCoA", distance = bray_dist_whole_vir)
+plot_ordination(ps_rel_ps1_duerkop, pcoa_res_whole_vir, color = "treatment", shape = "day") +
+  geom_point(size = 3) +
+  scale_color_manual(values = c("colitis" = "red", "control" = "blue")) +
+  theme_minimal() +
+  labs(title = "PCoA (Bray-Curtis)", color = "Treatment")
+#Make sure the values in treatment are exactly "colitis" and "control" (case-sensitive).
+
+
+
+
+
+
+
+```
+
+
+
+```{r}
+#2nd Phyloseq Object 
+#Comparing the whole virome- with bacphlip taxonomy to compare temperate and virulent phages
+
+
+
+library("phyloseq")
+OTU_D2 = otu_table(ps_otu_reads, taxa_are_rows = TRUE)
+TAX_D2 = tax_table(free_vir_taxa_bacphlip_only)
+META_D2 <- sample_data(metadata_duerkop)
+
+
+sample_names(META_D2) <- metadata_duerkop$filename
+PS_D2 = phyloseq(OTU_D2, TAX_D2, META_D2)
+
+PS_D2
+
+
+
+
+
+```
+
+
+```{r}
+#Im finding it easier to just plot the temperate phage relative abundance outside of PS 
+#note - you will notice that the number of rows is 2178, not 1905. But... The 273 removed are given abundances of 0
+  library(ggplot2)
+ps_melt_PSD2 <- psmelt(PS_D2)
+#arrange(ps_melt_PSD2, Abundance)
+
+ps_melt_PSD2$Lifestyle <- factor(ps_melt_PSD2$Lifestyle, levels = c("Virulent", "Temperate"))
+
+ps_melt_PSD2_colitis <- ps_melt_PSD2[ps_melt_PSD2$treatment == "colitis",]
+ps_melt_PSD2_control <- ps_melt_PSD2[ps_melt_PSD2$treatment == "control",]
+
+psmelttemp_order <- c("Virulent", "Temperate")
+
+cols_control <- c("Virulent" = "#DAF0F7", "Temperate" = "#6699cc")
+cols_colitis <- c("Virulent" = "#fde0e0", "Temperate" = "#f97c7c")
+ps_melt_PSD2
+
+#control
+
+plot_control_temp <- ps_melt_PSD2_control  %>% 
+  ggplot(aes(x=filename, y=Abundance)) + 
+  facet_grid(~ treatment + day, scales = "free_x") +
+  geom_bar(aes(fill = Lifestyle), stat = "identity", position = "fill", width = 1) +
+   scale_fill_manual(values=cols_control)
+    theme(axis.text.x = element_text(angle = 90),
+        axis.text.y = element_text(color = "black"),
+        strip.text = element_text(face = "bold"),
+        strip.background = element_blank()) 
+plot_control_temp  
+
+
+
+
+
+#colitis 
+
+plot_colitis_temp <- ps_melt_PSD2_colitis  %>% 
+  ggplot(aes(x=filename, y=Abundance)) + 
+  facet_grid(~ treatment + day, scales = "free_x") +
+  geom_bar(aes(fill = Lifestyle), stat = "identity", position = "fill", width = 1) +
+   scale_fill_manual(values=cols_colitis)
+    theme(axis.text.x = element_text(angle = 90),
+        axis.text.y = element_text(color = "black"),
+        strip.text = element_text(face = "bold"),
+        strip.background = element_blank()) 
+plot_colitis_temp  
+
+sample_sums(PS_D1)
+
+
+#ps_melt_PSD2  %>% ps_melt_PSD2
+
+```
+
+
+
+
+
+
+```{r}
+library(microViz)
+#plot colitis rel ab with each sample visible 
+
+ PS_D2_colitis <- subset_samples(PS_D2, treatment == "colitis" )
+ cols_colitis_box <- c("0" = "#fde0e0", "14" =  "#f4c1c1", "42" = "#f97c7c")
+ 
+plot_data_temp_col <- PS_D2_colitis %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Lifestyle") %>%
+  ps_get() %>%
+  ps_otu2samdat("Temperate") %>% 
+  samdat_tbl()
+
+
+
+ggplot(plot_data_temp_col, aes(x = day, y = Temperate)) +
+  ylim(0.5,1) +
+  geom_boxplot(width = 0.5, fill = cols_colitis_box) +
+  geom_jitter(width = 0.2, alpha = 0.5, colour="black")  +
+  theme_bw()
+
+
+write.csv(plot_data_temp_col, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/relative_abundance_11_2025/relab_temp_col.csv")
+
+
+#plot control rel ab with each sample visible 
+
+
+
+ PS_D2_control <- subset_samples(PS_D2, treatment == "control" )
+ cols_control_box <- c("0" = "#F7FFE5", "14" =  "#E1ECC8" , "42" = "#A0C49D")
+ 
+plot_data_temp_control <- PS_D2_control %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Lifestyle") %>%
+  ps_get() %>%
+  ps_otu2samdat("Temperate") %>% # adds Parabacteroides as sample data!
+  samdat_tbl()
+
+
+
+ggplot(plot_data_temp_control, aes(x = day, y = Temperate)) +
+  ylim(0.5,1) +
+  geom_boxplot(width = 0.5, fill = cols_control_box) +
+  geom_jitter(width = 0.2, alpha = 0.5, colour="black")  +
+  theme_bw()
+
+
+write.csv(plot_data_temp_control, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/relative_abundance_11_2025/relab_temp_con.csv")
+
+joined_relab <- rbind(plot_data_temp_control,plot_data_temp_col)
+
+median(joined_relab$Temperate)
+mean(joined_relab$Temperate)
+
+sample_sums(PS_D1)
+
+```
+
+
+
+
+```{r}
+library(microViz)
+#plot colitis rel ab with each sample visible 
+
+#same as above except with paired connecting lines 
+
+
+ggplot(plot_data_temp_col, aes(x = day, y = Temperate)) +
+  ylim(0.5,1) +
+  geom_boxplot(width = 0.5, fill = cols_colitis_box) +
+  geom_line(aes(group=mouseID), position = position_dodge(0.2)) +
+  geom_point(aes(fill=Temperate,group=mouseID), position = position_dodge(0.2)) +
+  theme_bw()
+
+
+
+
+#plot control rel ab with each sample visible 
+
+
+
+
+ggplot(plot_data_temp_control, aes(x = day, y = Temperate)) +
+  ylim(0.5,1) +
+   geom_boxplot(width = 0.5, fill = cols_control_box) +
+  geom_line(aes(group=mouseID), position = position_dodge(0.2)) +
+  geom_point(aes(fill=Temperate,group=mouseID), position = position_dodge(0.2)) +
+  theme_bw()
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+#Function: Grouped Taxa Bar plots : By day of experiment 
+
+#can either group by patient or group by diagnosis as a whole 
+#if grouping by diag as a whole, group_whole = TRUE, if grouping by patient group_whole = FALSE
+
+
+
+
+fun_bp_day <- function(ps, rank) {
+  
+  
+  ps1 <- ps %>%
+ tax_fix(unknowns = "NA")
+  
+  
+    execpart <- group_whole
+
+
+
+ ps2 <-  merge_samples2(ps1, group = "Participant.ID") 
+plot <- comp_barplot(ps2, tax_level = rank, n_taxa =8, group_by = "diagnosis.x", sample_order = "bray", palette = distinct_palette(8, pal = "kelly")) 
+
+plot 
+  }  
+```
+
+
+
+
+
+
+
+
+
+```{r}
+#3rd  PS object
+#Comparing just the temperate  virome- with IPhoP taxonomy 
+
+library("phyloseq")
+OTU_D3 = otu_table(ps_otu_reads_temp, taxa_are_rows = TRUE)
+TAX_D3 = tax_table(free_vir_taxa_iphop_only)
+
+
+rownames(metadata_duerkop) <- metadata_duerkop$filename
+META_D3 <- sample_data(metadata_duerkop)
+#sample_names(META_D3)
+#sample_names(META_D3) <- metadata_duerkop$filename
+
+
+
+
+PS_D3 = phyloseq(OTU_D3, TAX_D3, META_D3)
+PS_D3
+
+sample_sums(PS_D3)
+
+
+# 
+
+
+#665_k141_137003_flag=0_multi=83.1610_len=15178 
+
+```
+
+```{r}
+rowSums(ps_otu_reads_temp)
+# 666_k79_118799_flag=0_multi=140.8262_len=83860_fragment_1  = 1144 1144
+taxa_sums(PS_D3)
+
+sample_names(PS_D3)
+rownames(sample_data(PS_D3))
+```
+
+```{r}
+#WIth raw reads 
+OTU_D3_v2 = otu_table(ps_otu_reads_temp2, taxa_are_rows = TRUE)
+TAX_D3 = tax_table(free_vir_taxa_iphop_only)
+
+rownames(metadata_duerkop) <- metadata_duerkop$filename
+META_D3 <- sample_data(metadata_duerkop)
+
+##sample_names(META_D3) <- metadata_duerkop$filename
+PS_D3_v2 = phyloseq(OTU_D3_v2, TAX_D3, META_D3)
+PS_D3_v2
+
+sample_sums(PS_D3_v2)
+sample_sums(PS_D3_v2)
+
+
+ps_otu_reads_temp2
+```
+
+```{r}
+PS_D3_melt_test <- psmelt(PS_D3)
+# sample - #V_663_S_0   OTU=668_k79_114365_flag=0_multi=69.4918_len=51719_fragment_1	- Abundance = 130
+
+
+sam_tools_cov_663 <- sam_tools_cov[sam_tools_cov$filename == "V_663_S_0",]
+#V_663_S_0	 = 130
+
+PS_D3_melt_test %>%
+  filter(Sample == "V_663_S_0") %>%
+  select(OTU, Abundance) %>%
+  head()
+
+sam_tools_cov_663 %>%
+  select(contigname, meandepth) %>%
+  head()
+
+#668_k79_114365_flag=0_multi=69.4918_len=51719_fragment_1
+```
+
+```{r}
+#tax_glom and then melt to get input for DESEQ2
+PS_3_famglom <- tax_glom(PS_D3, taxrank="Family", NArm = TRUE) 
+ps_melt_ps3_fam <- psmelt(PS_3_famglom)
+
+write.csv(ps_melt_ps3_fam, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/deseq2_11_2025/temperate_virome_phfs/temp_phfs.csv")
+
+estimate_richness(PS_3_famglom)
+
+#AS Sanity check Run deseq while putting Narm as FALSE 
+
+
+PS_3_famglom2 <- tax_glom(PS_D3, taxrank="Family", NArm = FALSE) 
+ps_melt_ps3_fam2 <- psmelt(PS_3_famglom2)
+
+
+write.csv(ps_melt_ps3_fam2, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/deseq2_11_2025/temperate_virome_phfs/temp_phfs2.csv")
+
+```
+
+```{r}
+
+PS_D3_melt <- psmelt(PS_D3)
+ps3_colitis <- subset_samples(PS_D3, treatment == "colitis" )
+
+ps3_0 <- subset_samples(PS_D3, day == "0" )
+ps3_14 <- subset_samples(PS_D3, day == "14" )
+ps3_42 <- subset_samples(PS_D3, day == "42" )
+
+ps_melt_ps3_colitis <- ps_melt(ps3_colitis)
+
+ps3_control <- subset_samples(PS_D3, treatment == "control" )
+ps_melt_ps3_control <- ps_melt(ps3_control)
+
+
+
+estimate_richness(PS_D3)
+estimate_richness(PS_D1)
+#estimate_richness(PS_D4)
+
+```
+
+```{r}
+
+  
+ tax_glom_fam_temp <- tax_glom(ps3_colitis, taxrank="Family")
+ ps_melt_fam_comp_tax_glom <- psmelt(tax_glom_fam_temp )
+ #write.csv(ps_melt_fam_comp_tax_glom, "/Users/anshul.sinha/Desktop/test1.csv")
+
+
+ps_melt_fam_comp <- ps3_colitis %>%
+   tax_fix() %>%
+  tax_transform("compositional", rank = "Family")
+
+
+ps_melt_fam_comp <- psmelt(ps_melt_fam_comp )
+#write.csv(ps_melt_fam_comp, "/Users/anshul.sinha/Desktop/test.csv")
+
+```
+```{r}
+ps_familyplot_temp <- tax_glom(PS_D3, taxrank = "Family", NArm = TRUE)
+ps_family_rel_plot_temp <- transform_sample_counts(ps_familyplot_temp, function(x) x / sum(x))
+
+
+df_ps_family_rel_plot_temp <- psmelt(ps_family_rel_plot_temp)
+ggplot(df_ps_family_rel_plot_temp, aes(x = filename, y = Abundance, fill = Family)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    panel.grid = element_blank()
+  ) +
+  ylab("Relative abundance") +
+  xlab("Sample")
+
+
+
+
+
+#Same but with NA 
+ps_familyplot_temp_NA <- tax_glom(PS_D3, taxrank = "Family", NArm = FALSE)
+ps_family_rel_plot_temp_NA <- transform_sample_counts(ps_familyplot_temp_NA, function(x) x / sum(x))
+
+
+ps_family_rel_plot_temp_NA_melt <- psmelt(ps_family_rel_plot_temp_NA)
+
+ps_family_rel_plot_temp_NA_melt <- ps_family_rel_plot_temp_NA_melt %>%
+  mutate(Family = if_else(is.na(Family), "unknown", Family))
+
+
+ggplot(ps_family_rel_plot_temp_NA_melt, aes(x = filename, y = Abundance, fill = Family)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    panel.grid = element_blank()
+  ) +
+  ylab("Relative abundance") +
+  xlab("Sample")
+
+
+```
+
+
+
+
+
+
+
+```{r}
+
+
+ cols_treats <- c("#779ecb","#f97c7c")
+ 
+
+#lacto plot
+ 
+ 
+plot_data_lacto_temp <- PS_D3 %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+    tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Lactobacillaceae") %>% # adds Lact as sample data!
+  samdat_tbl()
+
+
+
+  
+ggplot(plot_data_lacto_temp, aes(x = day, y = f__Lactobacillaceae, fill = treatment)) +
+  geom_boxplot(width = 0.5) +   scale_fill_manual(values = cols_treats) +
+  geom_point(position=position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1), 
+    alpha=0.4) + 
+  scale_y_continuous(
+    breaks = log2(1 / 2^(0:13)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.0005), log2(0.5))
+  ) +
+  theme_bw() +
+  theme(axis.title.x = element_text(size = 16),
+  axis.text.x = element_text(size = 12.5),
+  axis.title.y = element_text(size = 16), 
+   axis.text.y = element_text(size = 12.5))
+
+
+
+#Erysiplot 
+
+
+
+plot_data_erysipelatrichaceae_temp <- PS_D3 %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+      tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Erysipelotrichaceae") %>% # adds Lact as sample!
+  samdat_tbl()
+
+ggplot(plot_data_erysipelatrichaceae_temp, aes(x = day, y = f__Erysipelotrichaceae, fill = treatment)) +
+  geom_boxplot(width = 0.5) +   scale_fill_manual(values = cols_treats) +
+  geom_point(position=position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1), 
+    alpha=0.4) + 
+  scale_y_continuous(
+    breaks = log2(1 / 2^(0:13)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.005), log2(0.23))
+  ) +
+  theme_bw() +
+  theme(
+  axis.title.x = element_text(size = 16),
+  axis.text.x = element_text(size = 12.5),
+  axis.title.y = element_text(size = 16), 
+   axis.text.y = element_text(size = 12.5))
+
+
+#Anaerotignaceae 
+
+plot_data_anaerotignaceae_temp <- PS_D3 %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+      tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Anaerotignaceae") %>% # adds Lact as sample data!
+  samdat_tbl() 
+
+ggplot(plot_data_anaerotignaceae_temp, aes(x = day, y = f__Anaerotignaceae, fill = treatment)) +
+  geom_boxplot(width = 0.5) +   scale_fill_manual(values = cols_treats) +
+  
+  geom_point(position=position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1), 
+    alpha=0.4) + 
+  scale_y_continuous(
+    breaks = log2(1 / 2^(0:13)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.005), log2(0.11))
+  ) + 
+  theme_bw() +
+  theme(
+  axis.title.x = element_text(size = 16),
+  axis.text.x = element_text(size = 12.5),
+  axis.title.y = element_text(size = 16), 
+   axis.text.y = element_text(size = 12.5)) 
+
+
+
+ 
+#Bifidobacteraceae  
+
+plot_data_bif_temp <- PS_D3 %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+      tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Bifidobacteriaceae") %>% 
+  samdat_tbl()
+
+ggplot(plot_data_bif_temp, aes(x = day, y = f__Bifidobacteriaceae, fill = treatment)) +
+  geom_boxplot(width = 0.5) +   scale_fill_manual(values = cols_treats) +
+  
+  geom_point(position=position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1), 
+    alpha=0.4) + 
+  scale_y_continuous(
+    breaks = log2(1 / 2^(0:13)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.005), log2(0.24))
+  )+ 
+  theme_bw() +
+  theme(
+  axis.title.x = element_text(size = 16),
+  axis.text.x = element_text(size = 12.5),
+  axis.title.y = element_text(size = 16), 
+   axis.text.y = element_text(size = 12.5)) 
+
+
+
+
+#######anaeroplasmataceae######
+
+plot_data_anaeroplasm_temp <- PS_D3 %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+      tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Anaeroplasmataceae") %>% 
+  samdat_tbl()
+
+ggplot(plot_data_anaeroplasm_temp, aes(x = day, y = f__Anaeroplasmataceae, fill = treatment)) +
+  geom_boxplot(width = 0.5) +   scale_fill_manual(values = cols_treats) +
+  
+  geom_point(position=position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1), 
+    alpha=0.4) + 
+  scale_y_continuous(
+    breaks = log2(1 / 2^(0:13)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.0005), log2(0.24))
+  )+ 
+  theme_bw() +
+  theme(
+  axis.title.x = element_text(size = 16),
+  axis.text.x = element_text(size = 12.5),
+  axis.title.y = element_text(size = 16), 
+   axis.text.y = element_text(size = 12.5)) 
+
+
+
+
+
+```
+```{r}
+ #sanity 1 
+
+plot_contig_k79_25742_test1 <- PS_D1 %>%
+  tax_fix() %>%
+  tax_transform("compositional") %>%
+   # tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("667_k79_25742_flag=0_multi=79.9467_len=29725") %>% # adds Lact as sample data!
+  samdat_tbl()
+
+
+
+write.csv(plot_contig_k79_25742_test1, "/Users/anshulsinha/Desktop/test/k79_25742.csv")
+
+
+PS_D3
+
+
+
+df_long <- psmelt(PS_D3)
+
+
+```
+
+
+```{r}
+##PLOTTING INDIVIDUAL CONTIGS PER THE DESEQ2 - "Condition 2" OUTPUT AT THE CONTIG LEVEL 
+
+
+#This one is a temperate contig identified as Anaerotignaceae 
+
+
+ taxa_names(PS_D3)
+ 
+plot_contig_k79_294625 <- PS_D3 %>%
+  tax_fix() %>%
+  tax_transform("compositional") %>%
+   # tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("667_k79_294625_flag=0_multi=26.9486_len=36915") %>% # adds this as sample data!
+  samdat_tbl()
+
+iphop_duerkop_virome_contig1 <- iphop_duerkop_virome[iphop_duerkop_virome$contigname == "667_k79_294625_flag=0_multi=26.9486_len=36915",]
+
+
+
+write.csv(plot_contig_k79_294625, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/relative_abundance_11_2025/votu/k79_294625.csv")
+
+
+
+
+#This one is unidentified temperate 
+ 
+plot_contig_k79_25742 <- PS_D3 %>%
+  tax_fix() %>%
+  tax_transform("compositional") %>%
+   # tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("667_k79_25742_flag=0_multi=79.9467_len=29725") %>% # adds Lact as sample data!
+  samdat_tbl()
+
+
+
+write.csv(plot_contig_k79_25742, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/relative_abundance_11_2025/votu/k79_25742.csv")
+
+
+
+
+
+```
+
+```{r}
+####FOR EXPORT ###TEMPERATE PHFs
+
+
+####lacto###
+ 
+ 
+plot_data_lacto_temp_test <- PS_D3 %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+ #   tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Lactobacillaceae") %>% # adds Lact as sample data!
+  samdat_tbl()
+
+# export 
+
+write.csv(plot_data_lacto_temp_test, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/relative_abundance_11_2025/familylevel/lactofam.csv")
+
+
+####ERYSIPLOT
+
+plot_data_erysipelatrichaceae_temp_test <- PS_D3 %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+     # tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Erysipelotrichaceae") %>% 
+  samdat_tbl()
+
+
+
+
+
+
+#test 
+ps_family <- tax_glom(PS_D3, taxrank = "Family")
+
+# 2) Transform counts to compositional (relative abundance)
+ps_family_rel <- transform_sample_counts(ps_family, function(x) x / sum(x))
+
+# 3) Melt to long format
+df_melt <- psmelt(ps_family_rel)  # Sample, OTU, Abundance, Family, and sample_data vars [page:1]
+length(unique(df_melt$OTU))
+
+write.csv(plot_data_erysipelatrichaceae_temp_test, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/relative_abundance_11_2025/familylevel/erysifam.csv")
+
+
+
+#Anaerotignaceae 
+
+plot_data_anaerotignaceae_temp_test <- PS_D3 %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+     # tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Anaerotignaceae") %>% # adds Lact as sample data!
+  samdat_tbl() 
+
+write.csv(plot_data_anaerotignaceae_temp_test, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/relative_abundance_11_2025/familylevel/anaerotig.csv")
+
+
+
+
+
+#######anaeroplasmataceae######
+
+plot_data_anaeroplasm_temp_test <- PS_D3 %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+     # tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Anaeroplasmataceae") %>% 
+  samdat_tbl()
+write.csv(plot_data_anaeroplasm_temp_test, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/relative_abundance_11_2025/familylevel/anaeroplasma.csv")
+
+
+#######Bifidobacteriaceae######
+
+plot_data_bif_temp_test <- PS_D3 %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+     # tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Bifidobacteriaceae") %>% 
+  samdat_tbl()
+write.csv(plot_data_bif_temp_test, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/relative_abundance_11_2025/familylevel/bif.csv")
+```
+
+
+```{r}
+###SANITY CHECK THAT THIS GIVES ME EXPECTED RESULTS 
+#Note that this is slightly different because I'm guessing the microviz strategy does NArm = FALSE 
+
+
+
+
+ps_family <- tax_glom(PS_D3, taxrank = "Family", NArm = TRUE)
+
+ps_family_rel <- transform_sample_counts(ps_family, function(x) x / sum(x))
+
+family_abund <- as.data.frame(otu_table(ps_family_rel))
+
+tax <- as.data.frame(tax_table(ps_family_rel))
+all(rownames(family_abund) == rownames(tax))
+
+family_abund$Family <- tax$Family
+
+
+####
+
+target_family_bif <- "f__Bifidobacteriaceae"
+
+family_rel_abund_table_bif <- family_abund[family_abund$Family == target_family_bif, ] #slight differences in values but trend is the same
+
+family_long_bif <- family_rel_abund_table_bif %>%
+  select(-Family) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "filename",
+    values_to = "RelAbundance"
+  )
+
+metabif <- sample_data(ps_family_rel) 
+
+final_bif <- family_long_bif %>% left_join(metabif, by = "filename")
+
+write.csv(final_bif, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/relative_abundance_11_2025/familylevelv2/bif.csv")
+
+
+#####
+
+target_family_lacto <- "f__Lactobacillaceae"
+
+family_rel_abund_table_lacto <- family_abund[family_abund$Family == target_family_lacto, ] #slight differences in values but trend is the same
+
+
+family_long_lacto <- family_rel_abund_table_lacto %>%
+  select(-Family) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "filename",
+    values_to = "RelAbundance"
+  )
+
+metalacto <- sample_data(ps_family_rel) 
+
+final_lacto <- family_long_lacto %>% left_join(metalacto, by = "filename")
+
+write.csv(final_lacto, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/relative_abundance_11_2025/familylevelv2/lacto.csv")
+
+
+
+###
+
+target_family_anaero <- "f__Anaeroplasmataceae"
+
+family_rel_abund_table_anaero <- family_abund[family_abund$Family == target_family_anaero, ] #slight differences in values but trend is the same
+
+
+family_long_anaero <- family_rel_abund_table_anaero %>%
+  select(-Family) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "filename",
+    values_to = "RelAbundance"
+  )
+
+metaanero <- sample_data(ps_family_rel) 
+
+final_anaero <- family_long_anaero %>% left_join(metaanero, by = "filename")
+
+write.csv(final_anaero, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/relative_abundance_11_2025/familylevelv2/anaeroplasma.csv")
+
+
+
+target_family_anaerotig <- "f__Anaerotignaceae"
+
+family_rel_abund_table_anaerotig <- family_abund[family_abund$Family == target_family_anaerotig, ] #slight differences in values but trend is the same
+
+
+
+family_long_anaerotig <- family_rel_abund_table_anaerotig %>%
+  select(-Family) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "filename",
+    values_to = "RelAbundance"
+  )
+
+metaanerotig <- sample_data(ps_family_rel) 
+
+metaanerotig <- family_long_anaerotig %>% left_join(metaanerotig, by = "filename")
+write.csv(metaanerotig, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/relative_abundance_11_2025/familylevelv2/anaerotig.csv")
+
+
+
+
+target_family_erysipel <- "f__Erysipelotrichaceae"
+
+family_rel_abund_table_erysipel <- family_abund[family_abund$Family == target_family_erysipel, ] #slight differences in values but trend is the same
+
+
+
+family_long_erysipel <- family_rel_abund_table_erysipel %>%
+  select(-Family) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "filename",
+    values_to = "RelAbundance"
+  )
+
+metaerysi <- sample_data(ps_family_rel) 
+
+final_erysi <- family_long_erysipel %>% left_join(metaerysi, by = "filename")
+
+write.csv(final_erysi, "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/relative_abundance_11_2025/familylevelv2/erysi.csv")
+
+
+
+
+```
+
+```{r}
+#Same as above but set it to FALSE 
+#NOTE THAT THESE VALUES ARE IDENTICAL TO THE MICROVIZ METHOD, SO MUST BE NOT REMOVING THE UNKNOWN FROM RELAB 
+
+ps_family2 <- tax_glom(PS_D3, taxrank = "Family", NArm = FALSE)
+
+ps_family_rel2 <- transform_sample_counts(ps_family2, function(x) x / sum(x))
+
+family_abund2 <- as.data.frame(otu_table(ps_family_rel2))
+
+tax2 <- as.data.frame(tax_table(ps_family_rel2))
+all(rownames(family_abund2) == rownames(tax2))
+
+family_abund2$Family <- tax2$Family
+
+
+target_family_bif2 <- "f__Bifidobacteriaceae"
+
+family_rel_abund_table_bif2 <- family_abund2[family_abund2$Family == target_family_bif2, ] #slight differences in values but trend is the same
+
+family_long_bif2 <- family_rel_abund_table_bif2 %>%
+  select(-Family) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "filename",
+    values_to = "RelAbundance"
+  )
+
+metabif2 <- sample_data(ps_family_rel2) 
+
+final_bif2 <- family_long_bif2 %>% left_join(metabif2, by = "filename")
+
+
+
+
+
+target_family_erysipel2 <- "f__Erysipelotrichaceae"
+
+family_rel_abund_table_erysipel2 <- family_abund2[family_abund2$Family == target_family_erysipel2, ] #slight differences in values but trend is the same
+
+
+
+family_long_erysipel2 <- family_rel_abund_table_erysipel2 %>%
+  select(-Family) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "filename",
+    values_to = "RelAbundance"
+  )
+
+metaerysi2 <- sample_data(ps_family_rel2) 
+
+final_erysi2 <- family_long_erysipel2 %>% left_join(metaerysi2, by = "filename")
+
+
+```
+
+```{r}
+#SAME AS ABOVE BUT SET TO FALSE 
+
+
+
+
+ps_family <- tax_glom(PS_D3, taxrank = "Family", NArm = TRUE)
+
+ps_family_rel <- transform_sample_counts(ps_family, function(x) x / sum(x))
+
+family_abund <- as.data.frame(otu_table(ps_family_rel))
+
+tax <- as.data.frame(tax_table(ps_family_rel))
+all(rownames(family_abund) == rownames(tax))
+
+family_abund$Family <- tax$Family
+
+
+####
+
+target_family_bif <- "f__Bifidobacteriaceae"
+
+family_rel_abund_table_bif <- family_abund[family_abund$Family == target_family_bif, ] #slight differences in values but trend is the same
+
+family_long_bif <- family_rel_abund_table_bif %>%
+  select(-Family) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "filename",
+    values_to = "RelAbundance"
+  )
+
+metabif <- sample_data(ps_family_rel) 
+
+final_bif <- family_long_bif %>% left_join(metabif, by = "filename")
+
+
+
+#####
+
+target_family_lacto <- "f__Lactobacillaceae"
+
+family_rel_abund_table_lacto <- family_abund[family_abund$Family == target_family_lacto, ] #slight differences in values but trend is the same
+
+
+family_long_lacto <- family_rel_abund_table_lacto %>%
+  select(-Family) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "filename",
+    values_to = "RelAbundance"
+  )
+
+metalacto <- sample_data(ps_family_rel) 
+
+final_lacto <- family_long_lacto %>% left_join(metalacto, by = "filename")
+
+
+
+
+###
+
+target_family_anaero <- "f__Anaeroplasmataceae"
+
+family_rel_abund_table_anaero <- family_abund[family_abund$Family == target_family_anaero, ] #slight differences in values but trend is the same
+
+
+family_long_anaero <- family_rel_abund_table_anaero %>%
+  select(-Family) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "filename",
+    values_to = "RelAbundance"
+  )
+
+metaanero <- sample_data(ps_family_rel) 
+
+final_anaero <- family_long_anaero %>% left_join(metaanero, by = "filename")
+
+
+
+
+target_family_anaerotig <- "f__Anaerotignaceae"
+
+family_rel_abund_table_anaerotig <- family_abund[family_abund$Family == target_family_anaerotig, ] #slight differences in values but trend is the same
+
+
+
+family_long_anaerotig <- family_rel_abund_table_anaerotig %>%
+  select(-Family) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "filename",
+    values_to = "RelAbundance"
+  )
+
+metaanerotig <- sample_data(ps_family_rel) 
+
+final_anaero <- family_long_anaerotig %>% left_join(metaanerotig, by = "filename")
+
+
+
+
+target_family_erysipel <- "f__Erysipelotrichaceae"
+
+family_rel_abund_table_erysipel <- family_abund[family_abund$Family == target_family_erysipel, ] #slight differences in values but trend is the same
+
+
+
+family_long_erysipel <- family_rel_abund_table_erysipel %>%
+  select(-Family) %>%
+  pivot_longer(
+    cols = everything(),
+    names_to = "filename",
+    values_to = "RelAbundance"
+  )
+
+metaerysi <- sample_data(ps_family_rel) 
+
+final_erysi <- family_long_erysipel %>% left_join(metaerysi, by = "filename")
+
+
+
+```
+
+
+
+
+
+
+
+```{r}
+
+#Plot just the colitis group 
+ cols_treats1 <- c("#f97c7c")
+
+
+#lacto plot
+ 
+ 
+plot_data_lacto_temp_col <- ps3_colitis %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+    tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Lactobacillaceae") %>% # adds Lact as sample data!
+  samdat_tbl()
+
+
+
+  
+ggplot(plot_data_lacto_temp_col, aes(x = day, y = f__Lactobacillaceae, fill = treatment)) +
+  geom_boxplot(width = 0.5) +   scale_fill_manual(values = cols_treats1) +
+  geom_point(position=position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1), 
+    alpha=0.4) + 
+  scale_y_continuous(
+    breaks = log2(1 / 2^(0:13)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.005), log2(0.4))
+  ) +
+  theme_bw()
+
+
+#same as above but with paired connecting lines 
+
+
+  
+ggplot(plot_data_lacto_temp_col, aes(x = day, y = f__Lactobacillaceae, fill = treatment)) +
+ geom_boxplot(width = 0.5) +   scale_fill_manual(values = cols_treats1) +
+  geom_line(aes(group=mouseID), position = position_dodge(0.4)) +
+  geom_point(aes(group=mouseID), position = position_dodge(0.4)) +
+scale_y_continuous(
+    breaks = log2(1 / 2^(0:13)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.005), log2(0.4))
+  ) +
+  theme_bw()
+
+
+
+
+
+
+#######Erysi#######
+
+
+
+#Erysiplot 
+
+
+plot_data_erysipelatrichaceae_tempcol <- ps3_colitis %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+      tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Erysipelotrichaceae") %>% # adds Lact as sample data!
+  samdat_tbl()
+
+ggplot(plot_data_erysipelatrichaceae_tempcol, aes(x = day, y = f__Erysipelotrichaceae, fill = treatment)) +
+geom_boxplot(width = 0.5) +   scale_fill_manual(values = cols_treats1) +
+  geom_point(position=position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1), 
+    alpha=0.4) + 
+  scale_y_continuous(
+    breaks = log2(1 / 2^(0:13)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.00005), log2(0.4))
+  ) +
+  theme_bw()
+
+
+#same as above but with paired connecting lines 
+
+
+  
+ggplot(plot_data_erysipelatrichaceae_tempcol, aes(x = day, y = f__Erysipelotrichaceae, fill = treatment)) +
+ geom_boxplot(width = 0.5) +   scale_fill_manual(values = cols_treats1) +
+  geom_line(aes(group=mouseID), position = position_dodge(0.4)) +
+  geom_point(aes(group=mouseID), position = position_dodge(0.4)) +
+scale_y_continuous(
+    breaks = log2(1 / 2^(0:13)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.00005), log2(0.4))
+  ) +
+  theme_bw()
+
+
+
+
+
+
+#######Bif#######
+
+plot_data_bif_tempcol <- ps3_colitis %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+      tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Bifidobacteriaceae") %>% # adds Lact as sample data!
+  samdat_tbl()
+
+ggplot(plot_data_bif_tempcol, aes(x = day, y = f__Bifidobacteriaceae, fill = treatment)) +
+geom_boxplot(width = 0.5) +   scale_fill_manual(values = cols_treats1) +
+  geom_point(position=position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1), 
+    alpha=0.4) + 
+  scale_y_continuous(
+    breaks = log2(1 / 2^(0:13)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.00005), log2(0.4))
+  ) +
+  theme_bw()
+
+
+#same as above but with paired connecting lines 
+
+
+  
+ggplot(plot_data_bif_tempcol, aes(x = day, y = f__Bifidobacteriaceae, fill = treatment)) +
+ geom_boxplot(width = 0.5) +   scale_fill_manual(values = cols_treats1) +
+  geom_line(aes(group=mouseID), position = position_dodge(0.4)) +
+  geom_point(aes(group=mouseID), position = position_dodge(0.4)) +
+scale_y_continuous(
+    breaks = log2(1 / 2^(0:13)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.00005), log2(0.4))
+  ) +
+  theme_bw()
+
+
+
+
+
+#######anaerotignaceae######
+
+plot_data_anaero_tempcol <- ps3_colitis %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+      tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Anaerotignaceae") %>% # adds Lact as sample data!
+  samdat_tbl()
+
+ggplot(plot_data_anaero_tempcol, aes(x = day, y = f__Anaerotignaceae, fill = treatment)) +
+geom_boxplot(width = 0.5) +   scale_fill_manual(values = cols_treats1) +
+  geom_point(position=position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1), 
+    alpha=0.4) + 
+  scale_y_continuous(
+    breaks = log2(1 / 2^(0:13)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.00005), log2(0.4))
+  ) +
+  theme_bw()
+
+
+#same as above but with paired connecting lines 
+
+
+  
+ggplot(plot_data_anaero_tempcol, aes(x = day, y = f__Anaerotignaceae, fill = treatment)) +
+ geom_boxplot(width = 0.5) +   scale_fill_manual(values = cols_treats1) +
+  geom_line(aes(group=mouseID), position = position_dodge(0.4)) +
+  geom_point(aes(group=mouseID), position = position_dodge(0.4)) +
+scale_y_continuous(
+    breaks = log2(1 / 2^(0:13)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.00005), log2(0.4))
+  ) +
+  theme_bw()
+
+
+
+
+
+
+#######anaeroplasmataceae######
+
+plot_data_anaeroplas_tempcol <- ps3_colitis %>%
+  tax_fix() %>%
+  tax_transform("compositional", rank = "Family") %>%
+      tax_transform("log2", zero_replace = "halfmin", chain = TRUE) %>%
+  ps_get() %>%
+  ps_otu2samdat("f__Anaeroplasmataceae") %>% # adds Lact as sample data!
+  samdat_tbl()
+
+ggplot(plot_data_anaeroplas_tempcol, aes(x = day, y = f__Anaeroplasmataceae, fill = treatment)) +
+geom_boxplot(width = 0.5) +   scale_fill_manual(values = cols_treats1) +
+  geom_point(position=position_jitterdodge(dodge.width = 0.6, jitter.width = 0.1), 
+    alpha=0.4) + 
+  scale_y_continuous(
+    breaks = log2(1 / 2^(0:13)),
+    labels = function(x) paste0(100 * round(2^x, digits = 5), "%"),
+    limits = c(log2(0.005), log2(0.4))
+  ) +
+  theme_bw()
+
+
+
+
+
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+#4th PS object
+#Comparing just the virulent  virome- with IPhoP taxonomy 
+
+OTU_D4 = otu_table(ps_otu_reads_vir, taxa_are_rows = TRUE)
+TAX_D4 = tax_table(free_vir_taxa_iphop_only)
+META_D4 <- sample_data(metadata_duerkop)
+
+
+sample_names(META_D4) <- metadata_duerkop$filename
+
+
+PS_D4 = phyloseq(OTU_D4, TAX_D4, META_D4)
+
+
+
+
+PS_D4
+sample_sums(PS_D1)
+sample_sums(PS_D3)
+
+sample_sums(PS_D4)
+
+
+taxa_in_ps2 <- taxa_names(PS_D4)
+
+taxa_in_ps <- taxa_names(PS_D3)
+
+temp_test <- bacphlip_duerkop[bacphlip_duerkop$Lifestyle == "Temperate",]
+
+taxa_in_bacphlip <- temp_test$contigname
+
+matching_taxa <- taxa_in_ps %in%  taxa_in_bacphlip 
+sum(matching_taxa)
+
+matching_taxa2 <- taxa_in_ps2 %in%  taxa_in_bacphlip 
+
+
+
+
+
+681+1117
+```
+```{r}
+
+
+# 1) Keep only that sample
+ps_V_666_S_14 <- prune_samples("V_666_S_14", PS_D4)
+
+# 2) Extract OTU table as matrix (taxa as rows, sample as the single column)
+otu_mat <- as(otu_table(ps_V_666_S_14), "matrix")
+
+# 3) Convert to data frame (each row = taxon/contig, column = V_663_S_14 abundances)
+otu_df_V_666_S_14 <- as.data.frame(otu_mat)
+
+
+otu_df_V_666_S_14_s <- otu_df_V_666_S_14[
+  order(otu_df_V_666_S_14$V_666_S_14, decreasing = TRUE),
+]
+
+```
+
+
+
+```{r}
+#Temperate Virome:Length Normalized  
+
+PS_D3
+otu_mat_duerkop_temp <- as(otu_table(PS_D3), "matrix")
+if (taxa_are_rows(PS_D3)) {
+  otu_mat_duerkop_temp <- t(otu_mat_duerkop_temp)
+}
+
+
+rarecurve_list_duerkop.temp <- vegan::rarecurve(
+  otu_mat_duerkop_temp,
+  step = 20,
+  sample = 400,
+  label = FALSE
+)
+
+
+###Goods###
+ps_melt_virome_temp.d <-  ps_melt(PS_D3) 
+
+ goods.data.virome.temp.d <- ps_melt_virome_temp.d %>% 
+  group_by(Sample) %>%
+  summarise(nseqs= sum(Abundance),
+            n_singletons = sum(Abundance == 1), 
+            goods = 100*(1- n_singletons/nseqs)) 
+
+goods.plot.virome.temp.d <- goods.data.virome.temp.d %>% 
+  ggplot(aes(x = nseqs, y = goods)) +
+  geom_point() +
+  scale_y_continuous(limits = c(0, 100))
+
+goods.data.virome.temp.d <- na.omit(goods.data.virome.temp.d)
+
+mean(goods.data.virome.temp.d$goods) #98.59
+median(goods.data.virome.temp.d$goods) #100 - and high Good's 
+min(goods.data.virome.temp.d$goods) #Lowest Good's is 94.15
+
+sample_sums(PS_D3)
+estimate_richness(PS_D3)
+goods.data.virome.temp.d
+
+# a bit weird - we're basically catching all the 81 temperate phages in all the samples (except for 668_T_42)
+# Some samples still have a lot of singletons (ie - 28 singletons in 479 sequences for 667_T_42- but we're still  )
+```
+```{r}
+
+PS_D4
+
+otu_mat_duerkop.vir <- as(otu_table(PS_D4), "matrix")
+if (taxa_are_rows(PS_D4)) {
+  otu_mat_duerkop.vir <- t(otu_mat_duerkop.vir)
+}
+
+# vegan's rarecurve function
+rarecurve_list_duerkop.vir <- vegan::rarecurve(
+  otu_mat_duerkop.vir,
+  step = 20,
+  label = FALSE
+)
+
+
+
+
+ps_melt_virome_vir_D4 <-  ps_melt(PS_D4) 
+
+
+
+
+ goods.data.virome.vir.d <- ps_melt_virome_vir_D4 %>% 
+  group_by(Sample) %>%
+  summarise(nseqs= sum(Abundance),
+            n_singletons = sum(Abundance == 1), 
+            goods = 100*(1- n_singletons/nseqs)) 
+
+goods.plot.viromevir <- goods.data.virome.vir.d %>% 
+  ggplot(aes(x = nseqs, y = goods)) +
+  geom_point() +
+  scale_y_continuous(limits = c(0, 100))
+
+goods.data.virome.vir.d <- na.omit(goods.data.virome.vir.d)
+
+mean(goods.data.virome.vir.d$goods) #97.14
+median(goods.data.virome.vir.d$goods) #100 - and high Good's 
+min(goods.data.virome.vir.d$goods) #74.19
+
+
+```
+
+
+
+```{r}
+#given the small sample size (31 for virulent) rarefying doesnt really make sense here 
+#Temperate Virome: Normalize by relative abundance 
+
+
+
+
+ps_rel_ps3_duerkop <- transform_sample_counts(PS_D3, function(x) x / sum(x))
+
+#validate the relab worked 
+mattest <- as(otu_table(ps_rel_ps3_duerkop), "matrix")
+colSums(mattest)
+estimate_richness(PS_D3)
+estimate_richness(PS_D1)
+
+ps_rel_ps3_duerkop
+
+
+ps3_0_rel <- subset_samples(ps_rel_ps3_duerkop, day == "0" )
+ps3_14_rel <- subset_samples(ps_rel_ps3_duerkop, day == "14" )
+ps3_42_rel <- subset_samples(ps_rel_ps3_duerkop, day == "42" )
+
+
+
+#Create Bray Matrices for Each 
+
+bray_dist_0_temp_rel <- phyloseq::distance(ps3_0_rel, method = "bray")
+bray_dist_14_temp_rel <- phyloseq::distance(ps3_14_rel, method = "bray")
+bray_dist_42_temp_rel <- phyloseq::distance(ps3_42_rel, method = "bray")
+
+
+write.csv(as.matrix(bray_dist_0_temp_rel), "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/diversity_11_13_25/temperate/temp0.csv")
+write.csv(as.matrix(bray_dist_14_temp_rel), "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/diversity_11_13_25/temperate/temp14.csv")
+write.csv(as.matrix(bray_dist_42_temp_rel), "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/diversity_11_13_25/temperate/temp42.csv")
+
+#Create 
+
+ps3_colitis2 <- subset_samples(ps_rel_ps3_duerkop, treatment == "colitis" )
+ps3_control2 <- subset_samples(ps_rel_ps3_duerkop, treatment == "control" )
+
+
+
+#Step 1: Is there a difference in temperate phage community by treatment (regardless of day)
+
+#ps_rel_ps3_duerkop_bray  <- phyloseq::distance(ps_rel_ps3_duerkop, method = "bray")
+#meta_all_temp <- as(sample_data(ps_rel_ps3_duerkop), "data.frame")
+#meta_all_temp$day <- as.factor(meta_all_temp$day)
+#meta_all_temp$day <- as.factor(meta_all_temp$mouseID)
+
+#Restricting across mice
+#treatment_block <- with(meta_all_temp, how(nperm = 999,
+#  plots = Plots(strata = mouseID, type = "free"),
+#  within = Within(type = "none")))
+
+
+#adonis2(ps_rel_ps3_duerkop_bray ~ treatment, data = meta_all_temp, permutations = treatment_block) # p=0.3
+
+
+#Now same thing but just days 14 and 42
+
+#ps3_14_and_42_rel <- subset_samples(ps_rel_ps3_duerkop, day == "14" | day == "42" )
+
+
+#bray_dist_14_42_temp <-  phyloseq::distance(ps3_14_and_42_rel, method = "bray")
+#meta_14_42_temp <- as(sample_data(ps3_14_and_42_rel), "data.frame")
+#meta_14_42_temp$day <- as.factor(meta_14_42_temp$day)
+#meta_14_42_temp$mouseID <- as.factor(meta_14_42_temp$mouseID)
+#meta_14_42_temp$treatment <-  as.factor(meta_14_42_temp$treatment)
+
+
+#all(rownames(as.matrix(bray_dist_14_42_temp)) == rownames(meta_14_42_temp))
+
+#now we want to restrict permutations across mice 
+
+#treatment_14_42_block <- with(meta_14_42_temp, how(nperm = 999,
+ # plots = Plots(strata = mouseID, type = "free"),
+  #within = Within(type = "none")))
+
+
+#adonis2(bray_dist_14_42_temp ~ treatment, data = meta_14_42_temp, permutations = treatment_14_42_block)
+
+ps3_colitis2 <- subset_samples(ps_rel_ps3_duerkop, treatment == "colitis" )
+ps3_control2 <- subset_samples(ps_rel_ps3_duerkop, treatment == "control" )
+
+
+
+#h1 <- with(your_data, how(nperm = 999, blocks = subject))
+#adonis2(distance ~ treatment, data = your_data, permutations = h1)
+
+#Colitis Day effect
+bray_dist_colitis_temp <-  phyloseq::distance(ps3_colitis2, method = "bray")
+
+meta_colitis_temp <- as(sample_data(ps3_colitis2), "data.frame")
+meta_colitis_temp$day <- as.factor(meta_colitis_temp$day)
+meta_colitis_temp$mouseID <- as.factor(meta_colitis_temp$mouseID)
+meta_colitis_temp$treatment <- as.factor(meta_colitis_temp$treatment)
+
+all(rownames(as.matrix(bray_dist_colitis_temp)) == rownames(meta_colitis_temp))
+
+
+colitis_block_temp <- with(meta_colitis_temp, how(nperm = 999, blocks = mouseID))
+set.seed(1)
+adonis2(bray_dist_colitis_temp ~ day, data = meta_colitis_temp, permutations = colitis_block_temp)
+adonis2(bray_dist_colitis_temp ~ meta_colitis_temp$day, data = meta_colitis_temp, permutations = colitis_block_temp)
+
+adonis_pq(ps3_colitis2, "day", dist_method = "bray")
+
+
+
+adonis2(bray_dist_colitis_temp ~ mouseID, data = meta_colitis_temp)
+
+
+ps3_colitis2_test <- ps3_colitis2
+sample_data(ps3_colitis2_test)$mouseID <- factor(sample_data(ps3_colitis2_test)$mouseID)
+adonis_pq(ps3_colitis2, "mouseID", dist_method = "bray")
+
+adonis2(bray_dist_colitis_temp ~ mouseID, data = meta_colitis_temp, permutations = colitis_block_temp)
+adonis_pq(ps3_colitis2_test, "mouseID", dist_method = "bray")
+
+
+#adonis_pq(ps3_colitis2_test, "mouseID", dist_method = "bray")
+ps3_colitis2_test3 <- ps3_colitis2
+#adonis2(bray_dist_colitis_temp ~ mouseID, data = meta_colitis_temp)
+
+library("dada2")
+library("MiscMetabar")
+
+
+
+#ord_colitis_temp <- dbrda(bray_dist_colitis_temp ~ day + Condition(mouseID), data = meta_colitis)
+#anova(ord_colitis_temp, permutations = colitis_block_temp)
+
+
+
+#trying a "series" block: 
+#Note that this may not be the best test since #1) Permutations are reduced because of specific ordering (limits power) #My time points are not spaced equidistant - ie- its 0, 14, 42 - and they don't represent an exact gradual increase in disease severity # mentions that this probably an issue: 
+
+#Will try regardless, but will likely stick with the simple blocking strategy 
+
+#ps3_colitis_time_series <- ps3_colitis
+  
+
+#bray_dist_colitis_ts <-  distance(ps3_colitis_time_series, method = "bray")
+#meta_colitis_ts <- as(sample_data(ps3_colitis_time_series), "data.frame")
+#orders metdata so each mouse is together and its in the order of 0,14,42
+#meta_colitis_ts <- meta_colitis_ts[order(meta_colitis_ts$mouseID, meta_colitis_ts$day), ]
+#reorder bray
+#sample_order_ts_colitis <- meta_colitis_ts$filename
+#bray_dist_colitis_ts <- as.matrix(bray_dist_colitis_ts)
+#bray_dist_colitis_ts <- bray_dist_colitis_ts[sample_order_ts_colitis, sample_order_ts_colitis]
+
+
+#meta_colitis_ts$day <- as.factor(meta_colitis_ts$day)
+#meta_colitis_ts$mouseID <- as.factor(meta_colitis_ts$mouseID)
+#meta_colitis_ts$treatment <- as.factor(meta_colitis_ts$treatment)
+
+
+#a#ll(rownames(as.matrix(bray_dist_colitis_ts)) == rownames(meta_colitis_ts))
+
+
+#perm_design_temp_series_colitis <- how(
+  #within = Within(type = "series"),            # or "free" if time order not important
+ # plots  = Plots(strata = meta_colitis_ts$mouseID, type ="none"),         # Each mouse is a plot (samples are grouped by mouse)
+ # nperm = 999
+#)
+
+
+#adonis2(bray_dist_colitis_ts ~ day, data = meta_colitis_ts, permutations = perm_design_temp_series_colitis) #p=0.11
+exists("day")
+
+
+
+#control 
+ps3_control_temp <- subset_samples(ps_rel_ps3_duerkop, treatment == "control" )
+
+bray_dist_control_temp <-  phyloseq::distance(ps3_control_temp, method = "bray")
+meta_control_temp <- as(sample_data(ps3_control_temp), "data.frame")
+meta_control_temp$day <- as.factor(meta_control_temp$day)
+meta_control_temp$mouseID <- as.factor(meta_control_temp$mouseID)
+meta_control_temp$treatment <- as.factor(meta_control_temp$treatment)
+
+
+all(rownames(as.matrix(bray_dist_control_temp)) == rownames(meta_control_temp))
+
+control_block_temp <- with(meta_control_temp, how(nperm = 999, blocks = mouseID))
+adonis2(bray_dist_control_temp ~ day, data = meta_control_temp, permutations = control_block_temp)
+
+
+
+
+
+
+
+
+###PCoA### TEMPERATE 
+
+#Create new PS object 
+
+ps_rel_ps3_duerkop_plot <- ps_rel_ps3_duerkop
+
+
+as(sample_data(ps_rel_ps3_duerkop_plot), "data.frame")
+
+# Capitalize treatment levels
+sample_data(ps_rel_ps3_duerkop_plot)$treatment <- factor(
+  sample_data(ps_rel_ps3_duerkop_plot)$treatment,
+  levels = c("colitis", "control"),
+  labels = c("Colitis", "Control")
+)
+bray_dist_temp <- phyloseq::distance(ps_rel_ps3_duerkop_plot, method = "bray")
+pcoa_res_temp <- ordinate(ps_rel_ps3_duerkop_plot, method = "PCoA", distance = bray_dist_temp)
+
+
+plot_ordination(ps_rel_ps3_duerkop_plot, pcoa_res_temp, label = "filename") 
+
+
+plot_ordination(ps_rel_ps3_duerkop, pcoa_res_temp, color = "treatment", shape = "day") +
+  geom_point(size = 7) +
+  scale_shape_discrete(name = "Day") +
+  scale_color_manual(
+    name = "Treatment",
+    values = c("colitis" = "red", "control" = "blue"),
+    labels = c("colitis" = "Colitis", "control" = "Control")
+  ) +
+  theme_minimal() +
+  theme(
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    
+    # --- TEXT SIZE SETTINGS ---
+    axis.title = element_text(size = 20),       # Axis labels (X, Y)
+    axis.text  = element_text(size = 16),       # Axis tick labels
+    legend.title = element_text(size = 22),     # Legend title
+    legend.text  = element_text(size = 20),     # Legend entries
+    plot.title = element_text(size = 22, face = "bold")  # Main title
+  ) +
+  labs(title = "PCoA (Bray-Curtis)")
+
+
+#SOME SANITY CHECKS: 
+
+
+
+#AND REMOVE TIME POINT = V_668_T_42
+temp_colitis_r668 <-  subset_samples(ps3_colitis2, sample_names(ps3_colitis2) != "V_668_T_42")
+
+
+bray_dist_colitis_r668 <-  phyloseq::distance(temp_colitis_r668, method = "bray")
+meta_colitis_r668 <- as(sample_data(temp_colitis_r668), "data.frame")
+meta_colitis_r668$day <- as.factor(meta_colitis_r668$day)
+meta_colitis_r668$mouseID <- as.factor(meta_colitis_r668$mouseID)
+meta_colitis_r668$treatment <- as.factor(meta_colitis_r668$treatment)
+
+all(rownames(as.matrix(bray_dist_colitis_r668)) == rownames(meta_colitis_r668))
+
+
+colitis_block_temp_r668 <- with(meta_colitis_r668, how(nperm = 999, blocks = mouseID))
+set.seed(1)
+
+adonis2(bray_dist_colitis_r668 ~ day, data = meta_colitis_r668, permutations = colitis_block_temp_r668) #still significanltly different without that sample
+
+
+
+
+
+```
+```{r}
+#Sanity check 
+ps_rel_ps3_duerkop_plot2 <- ps_rel_ps3_duerkop
+
+# Capitalize treatment levels
+sample_data(ps_rel_ps3_duerkop_plot2)$treatment <- factor(
+  sample_data(ps_rel_ps3_duerkop_plot2)$treatment,
+  levels = c("colitis", "control"),
+  labels = c("Colitis", "Control")
+)
+
+bray_dist_temp2 <- phyloseq::distance(ps_rel_ps3_duerkop_plot2, method = "bray")
+pcoa_res_temp2 <- ordinate(ps_rel_ps3_duerkop_plot2, method = "PCoA", distance = bray_dist_temp2)
+
+plot_ordination(ps_rel_ps3_duerkop_plot2, pcoa_res_temp2, label = "filename") 
+
+
+
+plot_ordination(ps_rel_ps3_duerkop_plot2, pcoa_res_temp2, color = "treatment", shape = "day") +
+  geom_point(size = 7) +
+  scale_shape_discrete(name = "Day") +
+  scale_color_manual(
+    name   = "Treatment",
+    values = c("Colitis" = "red", "Control" = "blue"),
+    labels = c("Colitis", "Control")
+  ) +
+  theme_minimal() +
+  theme(
+    axis.line     = element_line(color = "black"),
+    panel.grid    = element_blank(),
+    axis.title    = element_text(size = 20),
+    axis.text     = element_text(size = 16),
+    legend.title  = element_text(size = 22),
+    legend.text   = element_text(size = 20),
+    plot.title    = element_text(size = 22, face = "bold")
+  ) +
+  labs(title = "PCoA (Bray-Curtis)")
+
+
+
+#ps_rel_ps3_duerkop_plot2 <- ps_rel_ps3_duerkop
+
+ps_rel_ps3_duerkop_plot3 <- ps_rel_ps3_duerkop
+pcoa_res_temp3 <- ordinate(ps_rel_ps3_duerkop_plot3, method = "PCoA", distance = "bray")
+plot_ordination(ps_rel_ps3_duerkop_plot3, pcoa_res_temp3, color = "treatment", shape = "day") 
+
+plot_ordination(ps_rel_ps3_duerkop_plot3, pcoa_res_temp3, color = "treatment", shape = "day") 
+
+
+
+
+
+plot_ordination(ps_rel_ps3_duerkop, pcoa_res_temp, color = "treatment", shape = "day") +
+  geom_point(size = 7) +
+  scale_shape_discrete(name = "Day") +
+  scale_color_manual(
+    name = "Treatment",
+    values = c("colitis" = "red", "control" = "blue"),
+    labels = c("colitis" = "Colitis", "control" = "Control")
+  ) +
+  theme_minimal() +
+  theme(
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    
+    # --- TEXT SIZE SETTINGS ---
+    axis.title = element_text(size = 20),       # Axis labels (X, Y)
+    axis.text  = element_text(size = 16),       # Axis tick labels
+    legend.title = element_text(size = 22),     # Legend title
+    legend.text  = element_text(size = 20),     # Legend entries
+    plot.title = element_text(size = 22, face = "bold")  # Main title
+  ) +
+  labs(title = "PCoA (Bray-Curtis)")
+
+
+
+plot_ordination(ps_rel_ps3_duerkop_plot2, pcoa_res_temp2, color = "treatment", shape = "day") +
+  geom_point(size = 7) +
+  scale_shape_discrete(name = "Day") +
+  scale_color_manual(
+    name   = "Treatment",
+    values = c("Colitis" = "red", "Control" = "blue"),
+    labels = c("Colitis", "Control")
+  ) +
+  theme_minimal() +
+  theme(
+    axis.line     = element_line(color = "black"),
+    panel.grid    = element_blank(),
+    axis.title    = element_text(size = 20),
+    axis.text     = element_text(size = 16),
+    legend.title  = element_text(size = 22),
+    legend.text   = element_text(size = 20),
+    plot.title    = element_text(size = 22, face = "bold")
+  ) +
+  labs(title = "PCoA (Bray-Curtis)")
+
+
+
+
+
+plot_ordination(ps_rel_ps3_duerkop_plot3, pcoa_res_temp3, color = "treatment", shape = "day") 
+
+```
+
+
+```{r}
+#See if sample size significantly makes a differences in my data? 
+
+sample_depth_temp <- data.frame(
+  SampleID = sample_names(PS_D3),
+  depth = sample_sums(PS_D3)
+)
+
+
+ps_rel_ps3_duerkop_norm <- ps_rel_ps3_duerkop
+meta_norm_all_temp <- as(sample_data(ps_rel_ps3_duerkop_norm), "data.frame")
+meta_norm_all_temp <- merge(meta_norm_all_temp, sample_depth_temp, by.x = "row.names", by.y = "SampleID", all.x = TRUE)
+
+# Set rownames back to sample names
+rownames(meta_norm_all_temp) <- meta_norm_all_temp$Row.names
+meta_norm_all_temp$Row.names <- NULL
+sample_data(ps_rel_ps3_duerkop_norm) <- sample_data(meta_norm_all_temp)
+
+
+# Create Bray-Curtis distance
+bray_dist_norm <- phyloseq::distance(ps_rel_ps3_duerkop_norm, method = "bray")
+
+# Metadata
+meta_norm_temp <- as(sample_data(ps_rel_ps3_duerkop_norm), "data.frame")
+meta_norm_temp$day <- as.factor(meta_norm_temp$day)
+meta_norm_temp$mouseID <- as.factor(meta_norm_temp$mouseID)
+meta_norm_temp$treatment <- as.factor(meta_norm_temp$treatment)
+meta_norm_temp$depth <- as.numeric(meta_norm_temp$depth)
+all(rownames(as.matrix(bray_dist_norm)) == rownames(meta_norm_temp))
+
+
+#sanity check that depth was added correctly
+
+sample_sums(PS_D3)
+meta_norm_temp
+# PERMANOVA
+ adonis2(bray_dist_norm ~ depth, data = meta_norm_temp, permutations = 999)  #
+ 
+
+ #Same with mouse as blocking factor 
+
+depth_block_temp <- with(meta_norm_temp, how(nperm = 999, blocks = mouseID))
+ adonis2(bray_dist_norm ~ depth, data = meta_norm_temp, permutations = depth_block_temp) 
+ adonis2(bray_dist_norm ~ depth, data = meta_norm_temp, strata = meta_norm_temp$mouseID) 
+
+ 
+ #Same but colitis only 
+ 
+ 
+sample_depth_temp <- data.frame(
+  SampleID = sample_names(PS_D3),
+  depth = sample_sums(PS_D3)
+)
+
+
+
+ps_rel_ps3_duerkop_norm_colitis <- ps3_colitis2
+# Suppose your normalized phyloseq object is ps_norm
+meta_norm_all_temp_colitis <- as(sample_data(ps_rel_ps3_duerkop_norm_colitis), "data.frame")
+meta_norm_all_temp_colitis <- merge(meta_norm_all_temp_colitis, sample_depth_temp, by.x = "row.names", by.y = "SampleID", all.x = TRUE)
+
+# Set rownames back to sample names
+rownames(meta_norm_all_temp_colitis) <- meta_norm_all_temp_colitis$Row.names
+meta_norm_all_temp_colitis$Row.names <- NULL
+sample_data(ps_rel_ps3_duerkop_norm_colitis) <- sample_data(meta_norm_all_temp_colitis)
+
+
+
+
+
+
+
+meta_norm_all_temp_colitis
+# Create Bray-Curtis distance
+bray_dist_norm_colitis <- phyloseq::distance(ps_rel_ps3_duerkop_norm_colitis, method = "bray")
+
+# Metadata
+meta_norm_all_temp_colitis <- as(sample_data(ps_rel_ps3_duerkop_norm_colitis), "data.frame")
+meta_norm_all_temp_colitis$day <- as.factor(meta_norm_all_temp_colitis$day)
+meta_norm_all_temp_colitis$mouseID <- as.factor(meta_norm_all_temp_colitis$mouseID)
+meta_norm_all_temp_colitis$treatment <- as.factor(meta_norm_all_temp_colitis$treatment)
+meta_norm_all_temp_colitis$depth <- as.numeric(meta_norm_all_temp_colitis$depth)
+all(rownames(as.matrix(bray_dist_norm_colitis)) == rownames(meta_norm_all_temp_colitis))
+
+
+# PERMANOVA
+ adonis2(bray_dist_norm_colitis ~ depth, data = meta_norm_all_temp_colitis, permutations = 999)  #
+ 
+
+ #Same with mouse as blocking factor 
+
+depth_block_temp_colitis <- with(meta_norm_all_temp_colitis, how(nperm = 999, blocks = mouseID))
+
+ adonis2(bray_dist_norm_colitis ~ depth, data = meta_norm_all_temp_colitis, permutations = depth_block_temp_colitis) 
+  adonis2(bray_dist_norm_colitis ~ day, data = meta_norm_all_temp_colitis, permutations = depth_block_temp_colitis) 
+
+ #NOW DO THIS WITH GOODS 
+ 
+ ps_rel_ps3_duerkop_norm_colitis2 <- ps_rel_ps3_duerkop_norm_colitis
+ 
+ goods.data.virome.temp.d_filtered <- goods.data.virome.temp.d %>% 
+   select(Sample,goods)
+ 
+ colnames(goods.data.virome.temp.d_filtered) <- c("SampleID", "goods")
+ goods.data.virome.temp.d_filtered <- as.data.frame(goods.data.virome.temp.d_filtered)
+ rownames(goods.data.virome.temp.d_filtered) <- goods.data.virome.temp.d_filtered$SampleID
+
+
+meta_norm_all_temp_colitis2 <- as(sample_data(ps_rel_ps3_duerkop_norm_colitis2), "data.frame")
+meta_norm_all_temp_colitis2 <- merge(meta_norm_all_temp_colitis2, goods.data.virome.temp.d_filtered, by.x = "row.names", by.y = "SampleID", all.x = TRUE)
+
+# Set rownames back to sample names
+rownames(meta_norm_all_temp_colitis2) <- meta_norm_all_temp_colitis2$Row.names
+meta_norm_all_temp_colitis2$Row.names <- NULL
+sample_data(ps_rel_ps3_duerkop_norm_colitis2) <- sample_data(meta_norm_all_temp_colitis2)
+
+
+bray_dist_norm_colitis2 <- phyloseq::distance(ps_rel_ps3_duerkop_norm_colitis2, method = "bray")
+
+# Metadata
+meta_norm_all_temp_colitis2 <- as(sample_data(ps_rel_ps3_duerkop_norm_colitis2), "data.frame")
+meta_norm_all_temp_colitis2$day <- as.factor(meta_norm_all_temp_colitis2$day)
+meta_norm_all_temp_colitis2$mouseID <- as.factor(meta_norm_all_temp_colitis2$mouseID)
+meta_norm_all_temp_colitis2$treatment <- as.factor(meta_norm_all_temp_colitis2$treatment)
+meta_norm_all_temp_colitis2$depth <- as.numeric(meta_norm_all_temp_colitis2$depth)
+meta_norm_all_temp_colitis2$goods <- as.numeric(meta_norm_all_temp_colitis2$goods)
+
+goods.data.virome.temp.d_filtered
+meta_norm_all_temp_colitis2
+all(rownames(as.matrix(bray_dist_norm_colitis2)) == rownames(meta_norm_all_temp_colitis2))
+
+depth_block_temp_colitis2 <- with(meta_norm_all_temp_colitis2, how(nperm = 999, blocks = mouseID))
+
+ adonis2(bray_dist_norm_colitis2 ~ goods, data = meta_norm_all_temp_colitis2, permutations = depth_block_temp_colitis2)
+  adonis2(bray_dist_norm_colitis2 ~ depth, data = meta_norm_all_temp_colitis2, permutations = depth_block_temp_colitis2)
+
+ adonis2(bray_dist_norm_colitis2 ~ day + goods, data = meta_norm_all_temp_colitis2, permutations = depth_block_temp_colitis2, by="margin")
+
+```
+
+
+
+
+
+
+
+
+
+
+
+
+```{r}
+
+#VIRULENT VIROME TEST 
+
+ps_rel_ps4_duerkop <- transform_sample_counts(PS_D4, function(x) x / sum(x))
+
+ps4_0_rel <- subset_samples(ps_rel_ps4_duerkop, day == "0" )
+ps4_14_rel <- subset_samples(ps_rel_ps4_duerkop, day == "14" )
+ps4_42_rel <- subset_samples(ps_rel_ps4_duerkop, day == "42" )
+
+
+bray_dist_0_vir_rel <- phyloseq::distance(ps4_0_rel, method = "bray")
+bray_dist_14_vir_rel <- phyloseq::distance(ps4_14_rel, method = "bray")
+bray_dist_42_vir_rel <- phyloseq::distance(ps4_42_rel, method = "bray")
+
+
+
+
+write.csv(as.matrix(bray_dist_0_vir_rel), "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/diversity_11_13_25/virulent/vir0.csv")
+write.csv(as.matrix(bray_dist_14_vir_rel), "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/diversity_11_13_25/virulent/vir14.csv")
+write.csv(as.matrix(bray_dist_42_vir_rel), "/Users/anshulsinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/re_analyses_11_2025/diversity_11_13_25/virulent/vir42.csv")
+
+
+
+
+
+
+ps4_colitis2 <- subset_samples(ps_rel_ps4_duerkop, treatment == "colitis" )
+ps4_control2 <- subset_samples(ps_rel_ps4_duerkop, treatment == "control" )
+
+
+#Does virulent virome change over time?
+#1) in the colitis group?
+bray_colitis_virulent <- phyloseq::distance(ps4_colitis2, method = "bray")
+meta_colitis_virulent <- as(sample_data(ps4_colitis2), "data.frame")
+meta_colitis_virulent$day <- as.factor(meta_colitis_virulent$day)
+meta_colitis_virulent$mouseID <- as.factor(meta_colitis_virulent$mouseID)
+meta_colitis_virulent$treatment <- as.factor(meta_colitis_virulent$treatment)
+
+all(rownames(as.matrix(bray_colitis_virulent)) == rownames(meta_colitis_virulent))
+
+
+colitis_block_virulent <- with(meta_colitis_virulent, how(nperm = 999, blocks = mouseID))
+set.seed(1)
+adonis2(bray_colitis_virulent ~ day, data = meta_colitis_virulent, permutations = colitis_block_virulent)
+
+
+
+
+#control 
+ps4_control2 <- subset_samples(ps_rel_ps4_duerkop, treatment == "control" )
+
+bray_dist_control_virulent <-  phyloseq::distance(ps4_control2, method = "bray")
+meta_control_virulent <- as(sample_data(ps4_control2), "data.frame")
+meta_control_virulent$day <- as.factor(meta_control_virulent$day)
+meta_control_virulent$mouseID <- as.factor(meta_control_virulent$mouseID)
+meta_control_virulent$treatment <- as.factor(meta_control_virulent$treatment)
+
+
+all(rownames(as.matrix(bray_dist_control_virulent)) == rownames(meta_control_virulent))
+
+set.seed(1)
+control_block_virulent <- with(meta_control_virulent, how(nperm = 999, blocks = mouseID))
+set.seed(1)
+adonis2(bray_dist_control_virulent ~ day, data = meta_control_virulent, permutations = control_block_virulent)
+adonis2(bray_dist_control_virulent ~ meta_control_virulent$day, data = meta_control_virulent, permutations = control_block_virulent)
+
+
+
+
+#Plot PCoA of all samples 
+
+bray_dist_vir <- phyloseq::distance(ps_rel_ps4_duerkop, method = "bray")
+pcoa_res_vir <- ordinate(ps_rel_ps4_duerkop, method = "PCoA", distance = bray_dist_vir)
+plot_ordination(ps_rel_ps4_duerkop, pcoa_res_vir, color = "treatment", shape = "day") +
+  geom_point(size = 3) +
+  theme_minimal() +
+  labs(title = "PCoA (Bray-Curtis)", color = "Sample Type")
+
+#Same without 668
+ps_filtered_vir668 <- subset_samples(ps_rel_ps4_duerkop, sample_names(ps_rel_ps4_duerkop) != "V_668_T_42")
+
+bray_dist_virr668 <- phyloseq::distance(ps_filtered_vir668, method = "bray")
+pcoa_res_virr668 <- ordinate(ps_filtered_vir668, method = "PCoA", distance = bray_dist_virr668)
+ps_filtered_vir668
+ps_rel_ps4_duerkop
+plot_ordination(ps_filtered_vir668, pcoa_res_virr668, color = "treatment", shape = "day") +
+  geom_point(size = 7) +
+  scale_shape_discrete(name = "Day") +
+  scale_color_manual(
+    name = "Treatment",
+    values = c("colitis" = "red", "control" = "blue"),
+    labels = c("colitis" = "Colitis", "control" = "Control")
+  ) +
+  theme_minimal() +
+  theme(
+    axis.line = element_line(color = "black"),
+    panel.grid = element_blank(),
+    
+    # --- TEXT SIZE SETTINGS ---
+    axis.title = element_text(size = 20),       # Axis labels (X, Y)
+    axis.text  = element_text(size = 16),       # Axis tick labels
+    legend.title = element_text(size = 22),     # Legend title
+    legend.text  = element_text(size = 20),     # Legend entries
+    plot.title = element_text(size = 22, face = "bold")  # Main title
+  ) +
+  labs(title = "PCoA (Bray-Curtis)")
+
+#same but remove V_668_T_42 which has low sample size and Good's coverage 
+sample_sums(PS_D4)
+
+ps_filtered_vir668 <- subset_samples(ps_rel_ps4_duerkop, sample_names(ps_rel_ps4_duerkop) != "V_668_T_42")
+meta_all_vir_r668 <- as(sample_data(ps_filtered_vir668), "data.frame")
+
+
+#remove from colitis group the sample with low coverage: 
+ps4_colitis_r668T <- subset_samples(ps4_colitis2, sample_names(ps4_colitis2) != "V_668_T_42")
+
+
+bray_dist_colitis_virulent_r668T <-  phyloseq::distance(ps4_colitis_r668T, method = "bray")
+
+meta_colitis_virulent_r668 <- as(sample_data(ps4_colitis_r668T), "data.frame")
+meta_colitis_virulent_r668$day <- as.factor(meta_colitis_virulent_r668$day)
+meta_colitis_virulent_r668$mouseID <- as.factor(meta_colitis_virulent_r668$mouseID)
+meta_colitis_virulent_r668$treatment <- as.factor(meta_colitis_virulent_r668$treatment)
+
+
+all(rownames(as.matrix(bray_dist_colitis_virulent_r668T)) == rownames(meta_colitis_virulent_r668))
+
+block_virulent_r668_colitis <- with(meta_colitis_virulent_r668, how(nperm = 999, blocks = mouseID))
+adonis2(bray_dist_colitis_virulent_r668T ~ day, data = meta_colitis_virulent_r668, permutations = block_virulent_r668_colitis)
+adonis2(bray_dist_colitis_virulent_r668T ~ meta_colitis_virulent_r668$day, data = meta_colitis_virulent_r668, permutations = block_virulent_r668_colitis)
+
+
+
+
+
+
+
+
+
+
+
+
+
+#See if depth significantly impacts composition
+
+sample_depth_virulent <- data.frame(
+  SampleID = sample_names(PS_D4),
+  depth = sample_sums(PS_D4)
+)
+
+ps_rel_ps4_duerkop_norm <- ps_rel_ps4_duerkop
+# Suppose your normalized phyloseq object is ps_norm
+meta_norm_all_virulent <- as(sample_data(ps_rel_ps4_duerkop_norm), "data.frame")
+meta_norm_all_virulent <- merge(meta_norm_all_virulent, sample_depth_virulent, by.x = "row.names", by.y = "SampleID", all.x = TRUE)
+
+# Set rownames back to sample names
+rownames(meta_norm_all_virulent) <- meta_norm_all_virulent$Row.names
+meta_norm_all_virulent$Row.names <- NULL
+sample_data(ps_rel_ps4_duerkop_norm) <- sample_data(meta_norm_all_virulent)
+
+
+# Create Bray-Curtis distance
+bray_dist_norm_virulent <- phyloseq::distance(ps_rel_ps4_duerkop_norm, method = "bray")
+
+# Metadata
+meta_norm_virulent <- as(sample_data(ps_rel_ps4_duerkop_norm), "data.frame")
+meta_norm_virulent$day <- as.factor(meta_norm_virulent$day)
+meta_norm_virulent$mouseID <- as.factor(meta_norm_virulent$mouseID)
+meta_norm_virulent$treatment <- as.factor(meta_norm_virulent$treatment)
+meta_norm_virulent$depth <- as.numeric(meta_norm_virulent$depth)
+
+
+# PERMANOVA
+ adonis2(bray_dist_norm_virulent ~ depth, data = meta_norm_virulent, permutations = 999)  #
+ 
+
+ #Same with mouse as blocking factor 
+
+depth_block_virulent <- with(meta_norm_virulent, how(nperm = 999, blocks = mouseID))
+set.seed(1)
+ adonis2(bray_dist_norm_virulent ~ depth, data = meta_norm_virulent, permutations = depth_block_virulent) 
+ adonis2(bray_dist_norm_virulent ~ depth, data = meta_norm_virulent, strata = meta_norm_virulent$mouseID) 
+
+
+
+```
+
+
+```{r}
+ps4_0 <- subset_samples(PS_D4, day == "0" )
+ps4_14 <- subset_samples(PS_D4, day == "14" )
+ps4_42 <- subset_samples(PS_D4, day == "42" )
+
+
+```
+
+
+
+```{r}
+
+ps4_colitis <- subset_samples(PS_D4, treatment == "colitis" )
+ps_melt_ps4_colitis <- ps_melt(ps4_colitis)
+
+ps4_control <- subset_samples(PS_D4, treatment == "control" )
+ps_melt_ps4_control <- ps_melt(ps4_control)
+
+ps4_0 <- subset_samples(PS_D4, day == "0" )
+ps4_14 <- subset_samples(PS_D4, day == "14" )
+ps4_42 <- subset_samples(PS_D4, day == "42" )
+
+
+
+```
+
+```{r}
+PS_4_famglom <- tax_glom(PS_D4, taxrank="Family", NArm = TRUE) 
+ps_melt_ps4_fam <- psmelt(PS_4_famglom)
+ps_melt_ps4 <- psmelt(PS_D4)
+
+#write.csv(ps_melt_ps4_fam, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/deseq2_virulent_virome/pbfs/vir_deseq.csv")
+#write.csv(ps_melt_ps4, "/Users/anshul.sinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/deseq2_virulent_virome/contigs/condition2/vir_deseq_contigs.csv")
+
+```
+
+```{r}
+ps_familyplot_vir <- tax_glom(PS_D4, taxrank = "Family", NArm = TRUE)
+ps_family_rel_plot_vir <- transform_sample_counts(ps_familyplot_vir, function(x) x / sum(x))
+
+
+df_ps_family_rel_plot_vir_melt <- psmelt(ps_family_rel_plot_vir)
+ggplot(df_ps_family_rel_plot_vir_melt, aes(x = filename, y = Abundance, fill = Family)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    panel.grid = element_blank()
+  ) +
+  ylab("Relative abundance") +
+  xlab("Sample")
+
+
+
+
+
+#Same but with NA 
+ps_familyplot_temp_NA <- tax_glom(PS_D3, taxrank = "Family", NArm = FALSE)
+ps_family_rel_plot_temp_NA <- transform_sample_counts(ps_familyplot_temp_NA, function(x) x / sum(x))
+
+
+ps_family_rel_plot_temp_NA_melt <- psmelt(ps_family_rel_plot_temp_NA)
+
+ps_family_rel_plot_temp_NA_melt <- ps_family_rel_plot_temp_NA_melt %>%
+  mutate(Family = if_else(is.na(Family), "unknown", Family))
+
+
+ggplot(ps_family_rel_plot_temp_NA_melt, aes(x = filename, y = Abundance, fill = Family)) +
+  geom_bar(stat = "identity") +
+  theme_bw() +
+  theme(
+    axis.text.x = element_text(angle = 90, hjust = 1, vjust = 0.5),
+    panel.grid = element_blank()
+  ) +
+  ylab("Relative abundance") +
+  xlab("Sample")
+
+```
+
+
+```{r}
+
+
+#how many unique contigs - temperate  - 81 
+#how many unique contigs - virulent - 62 
+
+#contigs can only be either temperate or virulent
+
+#PBFs can be temperate, virulent or both 
+
+
+length(unique(ps_melt_ps3$OTU)) 
+length(unique(ps_melt_ps4$OTU)) 
+
+
+#how many unique PBFS
+
+
+# 20 unique PBFs - temperate 
+length(unique(ps_melt_ps3_fam$OTU)) 
+
+
+# 9 unique PBFs - virulent  
+
+length(unique(ps_melt_ps4_fam$OTU)) 
+
+
+
+
+
+
+####   UPSET PLOT #####
+#now make a plot that shows the PBFs showed and shared 
+
+
+# combined melted PBFs from temp and vir 
+
+ps_melt_ps3_fam$ID <-"Temperate"
+ps_melt_ps4_fam$ID <- "Virulent"
+
+#make this just "unique" 
+ps_melt_ps3_fam_unique <- ps_melt_ps3_fam[!duplicated(ps_melt_ps3_fam$OTU),]
+ps_melt_ps4_fam_unique <- ps_melt_ps4_fam[!duplicated(ps_melt_ps4_fam$OTU),]
+
+#Sanity check to validate approach below: 
+# shared families
+shared <- intersect(ps_melt_ps3_fam_unique$Family, ps_melt_ps4_fam_unique$Family)
+
+# unique to df1
+unique_to_df1 <- setdiff(ps_melt_ps3_fam_unique$Family, ps_melt_ps4_fam_unique$Family)
+
+# unique to df2
+unique_to_df2 <- setdiff(ps_melt_ps4_fam_unique$Family, ps_melt_ps3_fam_unique$Family)
+length(shared)
+length(unique_to_df1)
+length(unique_to_df2)
+
+
+ps_combined_temp_vir <- rbind(ps_melt_ps3_fam_unique, ps_melt_ps4_fam_unique)
+ps_combined_temp_vir <- ps_combined_temp_vir %>%
+  select(Family, ID)
+ps_combined_temp_vir
+
+
+
+ps_combined_temp_vir <- ps_combined_temp_vir  %>%
+ group_by(Family) %>%
+  summarize(
+    Temperate = as.numeric("Temperate" %in% ID),
+    Virulent = as.numeric("Virulent" %in% ID)
+  ) %>%
+  ungroup()
+
+
+ps_combined_temp_vir_upset <- ps_combined_temp_vir %>%
+  select(Temperate, Virulent)
+
+ps_combined_temp_vir_upset <- as.data.frame(ps_combined_temp_vir_upset)
+
+
+
+set_vars <- c("Temperate", "Virulent")
+
+plot_upset <- upset(ps_combined_temp_vir_upset, sets = set_vars, sets.bar.color=c("#2F4C39","#B19CD8"),
+      mainbar.y.label = "Shared Predicted Bacterial Families", sets.x.label = "Predicted Bacterial Families", 
+      text.scale = c(0,16,0,16,16,20), point.size = 30, line.size = 19) 
+
+#ggsave('/Users/anshul.sinha/Desktop/IBD_prophages_aim/bioinformatics_aim/bioinformatics_duerkop/bioinformatics_duerkop_re_analyze_2023/virome_2023/R/stockdale_bowtie_thresholds/upset_plot.pn', ggplotify::as.ggplot(plot_upset))
+
+#plot richness - contig level 
+
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+# Make plot for control and colitis (Temp Rel Ab) With Microviz, I cant get the virulent and temp on the same plot
+
+
+
+```
+
+
+
+```{r}
+#try plotting a different way using microshades 
+# For microshades, you first need to agglomerate and 
+# normalize your phyloseq object, and melt it into a data frame
+# this can be done easily using prep_mdf() from the speedyseq package
+
+
+
+
+
+ps3_mdf <- prep_mdf(PS_D3, subgroup_level = "Family", remove_na = TRUE)
+ps4_mdf <- prep_mdf(PS_D4, subgroup_level = "Family", remove_na = TRUE)
+
+
+
+
+
+#add additional metadata 
+
+
+
+
+
+
+ps3_mdf$lifestyle <- "Temperate"
+ps4_mdf$lifestyle <- "Virulent"
+
+
+
+
+mdf_comb <- rbind(ps3_mdf, ps4_mdf)
+unique(mdf_comb$Phylum)
+# Replace first 3 chracters with empty string ""
+mdf_comb$Phylum <- gsub("^.{0,3}", "", mdf_comb$Phylum)
+mdf_comb$Family <- gsub("^.{0,3}", "", mdf_comb$Family)
+
+
+
+#now change values to be in line with current taxonomy
+
+mdf_comb 
+
+#removing the one "Other phylum"
+
+#mdf_comb <- mdf_comb[!mdf_comb$Phylum == "Patescibacteria",]
+
+
+
+ 
+# Create a color object for the specified data
+color_obj_comb <- create_color_dfs(mdf_comb, selected_groups =  c('Firmicutes', 'Bacteroidota', 'Proteobacteria', 'Verrucomicrobiota', "Actinobacteriota"), subgroup_level = "Family", cvd = TRUE, top_n_subgroups = 4)
+color_obj_comb
+
+
+
+mdf_comb <- color_obj_comb$mdf
+cdf_comb <- color_obj_comb$cdf
+
+
+updated_objs <- extend_group(mdf_comb, cdf_comb, "Phylum", "Family", "Firmicutes", "micro_cvd_green", "micro_green", n_add = 5)
+
+mdf_comb_update <- updated_objs$mdf
+cdf_comb_update <- updated_objs$cdf
+
+
+
+
+
+
+#now try to extend to 
+
+
+plot_1 <- plot_microshades(mdf_comb_update, cdf_comb_update, group_label = "Phylum Family") +
+  facet_grid(~ factor(lifestyle, levels = c("Virulent", "Temperate")) + treatment + day, scales = "free_x") +
+   theme(legend.text = element_text(face = "italic"), legend.key.size = unit(12, "pt")) + 
+    guides(fill = guide_legend(ncol = 1)) + 
+   theme(strip.background = element_blank()) +
+   theme(legend.key = element_blank()) + 
+   theme(strip.text = element_text(size =11.3))
+ 
+
+
+
+```
+
+```{r}
+#subset samples 
+
+PS_D3_0 <- subset_samples(PS_D3, day== "0")
+PS_D4_0 <- subset_samples(PS_D4, day == "0")
+
+PS_D3_14 <- subset_samples(PS_D3, day== "14")
+PS_D4_14 <- subset_samples(PS_D4, day == "14")
+
+PS_D3_42 <- subset_samples(PS_D3, day== "42")
+PS_D4_42 <- subset_samples(PS_D4, day == "42")
+
+
+
+```
+
+
+
+
+
+
+
+```{r}
+#try plotting a different way using microshades 
+# For microshades, you first need to agglomerate and 
+# normalize your phyloseq object, and melt it into a data frame
+# this can be done easily using prep_mdf() from the speedyseq package
+
+
+#same but day 0 
+
+
+ps3_mdf_0 <- prep_mdf(PS_D3_0, subgroup_level = "Family", remove_na = TRUE)
+ps4_mdf_0 <- prep_mdf(PS_D4_0, subgroup_level = "Family", remove_na = TRUE)
+
+
+#add additional metadata 
+
+
+ps3_mdf_0$lifestyle <- "Temperate"
+ps4_mdf_0$lifestyle <- "Virulent"
+
+
+
+
+mdf_comb_0 <- rbind(ps3_mdf_0, ps4_mdf_0)
+unique(mdf_comb_0$Phylum)
+# Replace first 3 chracters with empty string ""
+mdf_comb_0$Phylum <- gsub("^.{0,3}", "", mdf_comb_0$Phylum)
+mdf_comb_0$Family <- gsub("^.{0,3}", "", mdf_comb_0$Family)
+
+
+
+
+
+#removing the one "Other phylum"
+
+#mdf_comb_0 <- mdf_comb_0[!mdf_comb_0$Phylum == "Patescibacteria",]
+
+
+
+ 
+# Create a color object for the specified data
+color_obj_comb_0 <- create_color_dfs(mdf_comb_0, selected_groups =  c('Firmicutes', 'Bacteroidota', 'Proteobacteria', 'Verrucomicrobiota', "Actinobacteriota"), subgroup_level = "Family", cvd = TRUE, top_n_subgroups = 4)
+color_obj_comb_0
+
+
+
+mdf_comb_0 <- color_obj_comb_0$mdf
+cdf_comb_0 <- color_obj_comb_0$cdf
+
+
+updated_objs_0 <- extend_group(mdf_comb_0, cdf_comb_0, "Phylum", "Family", "Firmicutes", "micro_cvd_green", "micro_green", n_add = 5)
+
+mdf_comb_update_0 <- updated_objs_0$mdf
+cdf_comb_update_0 <- updated_objs_0$cdf
+
+
+#change values for aesthetics 
+
+
+
+mdf_comb_update_0 <- mdf_comb_update_0 %>% 
+  mutate(treatment = str_replace_all(treatment, "control", "Control"))
+
+mdf_comb_update_0 <- mdf_comb_update_0 %>% 
+  mutate(treatment = str_replace_all(treatment, "colitis", "Colitis"))
+
+mdf_comb_update_0$Sample <-  gsub('.*663.*','C1', mdf_comb_update_0$Sample)
+mdf_comb_update_0$Sample <-  gsub('.*665.*','C2', mdf_comb_update_0$Sample)
+mdf_comb_update_0$Sample <-  gsub('.*666.*','C3', mdf_comb_update_0$Sample)
+mdf_comb_update_0$Sample <-  gsub('.*667.*','D1', mdf_comb_update_0$Sample)
+mdf_comb_update_0$Sample <-  gsub('.*668.*','D2', mdf_comb_update_0$Sample)
+mdf_comb_update_0$Sample <-  gsub('.*669.*','D3', mdf_comb_update_0$Sample)
+
+
+
+
+#now try to extend to 
+
+
+plot_1_0 <- plot_microshades(mdf_comb_update_0, cdf_comb_update_0, group_label = "Predicted Phage Host \n Phylum-Family") +
+  facet_grid(~ factor(lifestyle, levels = c("Virulent", "Temperate")) + factor(treatment, levels = c("Control", "Colitis")) , scales = "free_x") + 
+   theme(legend.text = element_text(face = "italic"), legend.key.size = unit(12, "pt")) + 
+    guides(fill = guide_legend(ncol = 1)) + 
+   theme(strip.background = element_blank()) +
+   theme(legend.key = element_blank()) + 
+   theme(strip.text = element_text(size =11.3))
+ 
+
+
+```
+
+
+```{r}
+#try plotting a different way using microshades 
+# For microshades, you first need to agglomerate and 
+# normalize your phyloseq object, and melt it into a data frame
+# this can be done easily using prep_mdf() from the speedyseq package
+
+
+#same but day 0 
+
+###TEST 
+
+
+ps3_mdf_0 <- prep_mdf(PS_D3_0, subgroup_level = "Family", remove_na = TRUE)
+ps4_mdf_0 <- prep_mdf(PS_D4_0, subgroup_level = "Family", remove_na = TRUE)
+
+
+#add additional metadata 
+
+
+ps3_mdf_0$lifestyle <- "Temperate"
+ps4_mdf_0$lifestyle <- "Virulent"
+
+
+
+
+mdf_comb_0 <- rbind(ps3_mdf_0, ps4_mdf_0)
+unique(mdf_comb_0$Phylum)
+# Replace first 3 chracters with empty string ""
+mdf_comb_0$Phylum <- gsub("^.{0,3}", "", mdf_comb_0$Phylum)
+mdf_comb_0$Family <- gsub("^.{0,3}", "", mdf_comb_0$Family)
+
+
+
+
+
+#removing the one "Other phylum"
+
+#mdf_comb_0 <- mdf_comb_0[!mdf_comb_0$Phylum == "Patescibacteria",]
+
+
+#now change names of phyla to updated NCBI names
+
+
+ 
+# Create a color object for the specified data
+color_obj_comb_0 <- create_color_dfs(mdf_comb_0, selected_groups =  c('Firmicutes', 'Bacteroidota', 'Proteobacteria', 'Verrucomicrobiota', "Actinobacteriota"), subgroup_level = "Family", cvd = TRUE, top_n_subgroups = 4)
+color_obj_comb_0
+
+
+
+mdf_comb_0 <- color_obj_comb_0$mdf
+cdf_comb_0 <- color_obj_comb_0$cdf
+
+
+updated_objs_0 <- extend_group(mdf_comb_0, cdf_comb_0, "Phylum", "Family", "Firmicutes", "micro_cvd_green", "micro_green", n_add = 5)
+
+mdf_comb_update_0 <- updated_objs_0$mdf
+cdf_comb_update_0 <- updated_objs_0$cdf
+
+
+#change values for aesthetics 
+
+#update cdf
+
+
+
+mdf_comb_update_0 <- mdf_comb_update_0 %>% 
+  mutate(treatment = str_replace_all(treatment, "control", "Control"))
+
+mdf_comb_update_0 <- mdf_comb_update_0 %>% 
+  mutate(treatment = str_replace_all(treatment, "colitis", "Colitis"))
+
+mdf_comb_update_0$Sample <-  gsub('.*663.*','C1', mdf_comb_update_0$Sample)
+mdf_comb_update_0$Sample <-  gsub('.*665.*','C2', mdf_comb_update_0$Sample)
+mdf_comb_update_0$Sample <-  gsub('.*666.*','C3', mdf_comb_update_0$Sample)
+mdf_comb_update_0$Sample <-  gsub('.*667.*','D1', mdf_comb_update_0$Sample)
+mdf_comb_update_0$Sample <-  gsub('.*668.*','D2', mdf_comb_update_0$Sample)
+mdf_comb_update_0$Sample <-  gsub('.*669.*','D3', mdf_comb_update_0$Sample)
+
+
+
+
+#now try to extend to 
+
+#now change the name of Firm to Bacillota etc 
+mdf_comb_update_0$Top_Phylum  <-  gsub('Firmicutes','Bacillota', mdf_comb_update_0$Top_Phylum)
+mdf_comb_update_0$Top_Phylum<-  gsub('Bacteroidetes','Bacteroidota',mdf_comb_update_0$Top_Phylum)
+mdf_comb_update_0$Top_Phylum  <-  gsub('Actinobacteriota','Actinomycetota',mdf_comb_update_0$Top_Phylum)
+mdf_comb_update_0$Top_Phylum <-  gsub('Proteobacteria','Pseudomonadota', mdf_comb_update_0$Top_Phylum)
+
+#now change the name of Firm to Bacillota etc 
+mdf_comb_update_0$group <- paste(mdf_comb_update_0$Top_Phylum, mdf_comb_update_0$Top_Family, sep = "-")
+
+
+#now change the name of Firm to Bacillota etc 
+cdf_comb_update_0$Top_Phylum  <-  gsub('Firmicutes','Bacillota', cdf_comb_update_0$Top_Phylum)
+cdf_comb_update_0$Top_Phylum<-  gsub('Bacteroidetes','Bacteroidota',cdf_comb_update_0$Top_Phylum)
+cdf_comb_update_0$Top_Phylum  <-  gsub('Actinobacteriota','Actinomycetota',cdf_comb_update_0$Top_Phylum)
+cdf_comb_update_0$Top_Phylum <-  gsub('Proteobacteria','Pseudomonadota', cdf_comb_update_0$Top_Phylum)
+
+#now change the name of Firm to Bacillota etc 
+cdf_comb_update_0$group <- paste(cdf_comb_update_0$Top_Phylum, cdf_comb_update_0$Top_Family, sep = "-")
+
+unique(mdf_comb_update_0$group)
+unique(cdf_comb_update_0$group)
+
+
+
+
+plot_1_0 <- plot_microshades(mdf_comb_update_0, cdf_comb_update_0, group_label = "Predicted Phage Host \n Phylum-Family") +
+  facet_grid(~ factor(lifestyle, levels = c("Virulent", "Temperate")) + factor(treatment, levels = c("Control", "Colitis")) , scales = "free_x") + 
+   theme(legend.text = element_text(face = "italic"), legend.key.size = unit(12, "pt")) + 
+    guides(fill = guide_legend(ncol = 1)) + 
+   theme(strip.background = element_blank()) +
+   theme(legend.key = element_blank()) + 
+   theme(strip.text = element_text(size =11.3))
+ 
+
+
+```
+
+
+
+
+
+
+
+
+
+```{r}
+
+microshades_plot2 <- function(temp, vir) {
+
+temp_mdf <- prep_mdf(temp, subgroup_level = "Family", remove_na = TRUE)
+vir_mdf <- prep_mdf(vir, subgroup_level = "Family", remove_na = TRUE)
+
+
+#add additional metadata 
+
+
+temp_mdf$lifestyle <- "Temperate"
+vir_mdf$lifestyle <- "Virulent"
+
+
+
+
+temp_vir_comb_mdf <- rbind(temp_mdf, vir_mdf)
+unique(temp_vir_comb_mdf$Phylum)
+# Replace first 3 chracters with empty string ""
+temp_vir_comb_mdf$Phylum <- gsub("^.{0,3}", "", temp_vir_comb_mdf$Phylum)
+temp_vir_comb_mdf$Family <- gsub("^.{0,3}", "", temp_vir_comb_mdf$Family)
+
+
+
+#removing the one "Other phylum"
+
+#temp_vir_comb_mdf <- temp_vir_comb_mdf[!temp_vir_comb_mdf$Phylum == "Patescibacteria",]
+
+
+#now change 
+
+ 
+# Create a color object for the specified data
+color_obj_comb_temp_vir <- create_color_dfs(temp_vir_comb_mdf, selected_groups =  c('Firmicutes', 'Bacteroidota', 'Proteobacteria', 'Verrucomicrobiota', "Actinobacteriota"), subgroup_level = "Family", cvd = TRUE, top_n_subgroups = 4)
+color_obj_comb_temp_vir
+
+
+
+mdf_comb_temp_vir <- color_obj_comb_temp_vir$mdf
+cdf_comb_temp_vir <- color_obj_comb_temp_vir$cdf
+
+
+updated_objs_0_temp_vir <- extend_group(mdf_comb_temp_vir, cdf_comb_temp_vir, "Phylum", "Family", "Firmicutes", "micro_cvd_green", "micro_green", n_add = 5)
+
+mdf_comb_update_temp_vir <- updated_objs_0_temp_vir$mdf
+cdf_comb_update_temp_vir <- updated_objs_0_temp_vir$cdf
+
+
+
+mdf_comb_update_temp_vir <- mdf_comb_update_temp_vir %>% 
+  mutate(treatment = str_replace_all(treatment, "control", "Control"))
+
+mdf_comb_update_temp_vir <- mdf_comb_update_temp_vir %>% 
+  mutate(treatment = str_replace_all(treatment, "colitis", "Colitis"))
+
+
+
+mdf_comb_update_temp_vir$Sample <-  gsub('.*663.*','C1', mdf_comb_update_temp_vir$Sample)
+mdf_comb_update_temp_vir$Sample <-  gsub('.*665.*','C2', mdf_comb_update_temp_vir$Sample)
+mdf_comb_update_temp_vir$Sample <-  gsub('.*666.*','C3', mdf_comb_update_temp_vir$Sample)
+mdf_comb_update_temp_vir$Sample <-  gsub('.*667.*','D1', mdf_comb_update_temp_vir$Sample)
+mdf_comb_update_temp_vir$Sample <-  gsub('.*668.*','D2', mdf_comb_update_temp_vir$Sample)
+mdf_comb_update_temp_vir$Sample <-  gsub('.*669.*','D3', mdf_comb_update_temp_vir$Sample)
+
+
+
+
+
+
+
+plot_microshades <- plot_microshades(mdf_comb_update_temp_vir, cdf_comb_update_temp_vir, group_label = "Phylum-Family") +
+    facet_grid(~ factor(lifestyle, levels = c("Virulent", "Temperate")) + factor(treatment, levels = c("Control", "Colitis")), scales = "free_x") +
+   theme(legend.text = element_text(face = "italic"), legend.key.size = unit(12, "pt")) + 
+    guides(fill = guide_legend(ncol = 1)) + 
+   theme(strip.background = element_blank()) +
+   theme(legend.key = element_blank()) + 
+   theme(strip.text = element_text(size =11.3)) + 
+    theme(legend.text=element_text(size=12)) 
+  
+ 
+plot_microshades
+}
+```
+
+
+
+
+```{r}
+#compare at each day 
+
+microshades_plot2(PS_D3_0, PS_D4_0)
+
+microshades_plot2(PS_D3_14, PS_D4_14)
+
+microshades_plot2(PS_D3_42, PS_D4_42)
+
+```
+
+
+
+```{r}
+#SAME BUT CHANGE THE PHYLA NAMES 
+
+microshades_plot3 <- function(temp, vir) {
+
+temp_mdf <- prep_mdf(temp, subgroup_level = "Family", remove_na = TRUE)
+vir_mdf <- prep_mdf(vir, subgroup_level = "Family", remove_na = TRUE)
+
+
+#add additional metadata 
+
+
+temp_mdf$lifestyle <- "Temperate"
+vir_mdf$lifestyle <- "Virulent"
+
+
+
+
+temp_vir_comb_mdf <- rbind(temp_mdf, vir_mdf)
+unique(temp_vir_comb_mdf$Phylum)
+# Replace first 3 chracters with empty string ""
+temp_vir_comb_mdf$Phylum <- gsub("^.{0,3}", "", temp_vir_comb_mdf$Phylum)
+temp_vir_comb_mdf$Family <- gsub("^.{0,3}", "", temp_vir_comb_mdf$Family)
+
+
+
+#removing the one "Other phylum"
+
+#temp_vir_comb_mdf <- temp_vir_comb_mdf[!temp_vir_comb_mdf$Phylum == "Patescibacteria",]
+
+
+#now change 
+
+ 
+# Create a color object for the specified data
+color_obj_comb_temp_vir <- create_color_dfs(temp_vir_comb_mdf, selected_groups =  c('Firmicutes', 'Bacteroidota', 'Proteobacteria', 'Verrucomicrobiota', "Actinobacteriota"), subgroup_level = "Family", cvd = TRUE, top_n_subgroups = 4)
+color_obj_comb_temp_vir
+
+
+
+mdf_comb_temp_vir <- color_obj_comb_temp_vir$mdf
+cdf_comb_temp_vir <- color_obj_comb_temp_vir$cdf
+
+
+updated_objs_0_temp_vir <- extend_group(mdf_comb_temp_vir, cdf_comb_temp_vir, "Phylum", "Family", "Firmicutes", "micro_cvd_green", "micro_green", n_add = 5)
+
+mdf_comb_update_temp_vir <- updated_objs_0_temp_vir$mdf
+cdf_comb_update_temp_vir <- updated_objs_0_temp_vir$cdf
+
+
+
+mdf_comb_update_temp_vir <- mdf_comb_update_temp_vir %>% 
+  mutate(treatment = str_replace_all(treatment, "control", "Control"))
+
+mdf_comb_update_temp_vir <- mdf_comb_update_temp_vir %>% 
+  mutate(treatment = str_replace_all(treatment, "colitis", "Colitis"))
+
+
+
+mdf_comb_update_temp_vir$Sample <-  gsub('.*663.*','C1', mdf_comb_update_temp_vir$Sample)
+mdf_comb_update_temp_vir$Sample <-  gsub('.*665.*','C2', mdf_comb_update_temp_vir$Sample)
+mdf_comb_update_temp_vir$Sample <-  gsub('.*666.*','C3', mdf_comb_update_temp_vir$Sample)
+mdf_comb_update_temp_vir$Sample <-  gsub('.*667.*','D1', mdf_comb_update_temp_vir$Sample)
+mdf_comb_update_temp_vir$Sample <-  gsub('.*668.*','D2', mdf_comb_update_temp_vir$Sample)
+mdf_comb_update_temp_vir$Sample <-  gsub('.*669.*','D3', mdf_comb_update_temp_vir$Sample)
+
+
+
+
+#now change the name of Firm to Bacillota etc 
+mdf_comb_update_temp_vir$Top_Phylum  <-  gsub('Firmicutes','Bacillota', mdf_comb_update_temp_vir$Top_Phylum)
+mdf_comb_update_temp_vir$Top_Phylum<-  gsub('Bacteroidetes','Bacteroidota',mdf_comb_update_temp_vir$Top_Phylum)
+mdf_comb_update_temp_vir$Top_Phylum  <-  gsub('Actinobacteriota','Actinomycetota',mdf_comb_update_temp_vir$Top_Phylum)
+mdf_comb_update_temp_vir$Top_Phylum <-  gsub('Proteobacteria','Pseudomonadota', mdf_comb_update_temp_vir$Top_Phylum)
+
+#now change the name of Firm to Bacillota etc 
+mdf_comb_update_temp_vir$group <- paste(mdf_comb_update_temp_vir$Top_Phylum, mdf_comb_update_temp_vir$Top_Family, sep = "-")
+
+
+#now change the name of Firm to Bacillota etc 
+cdf_comb_update_temp_vir$Top_Phylum  <-  gsub('Firmicutes','Bacillota', cdf_comb_update_temp_vir$Top_Phylum)
+cdf_comb_update_temp_vir$Top_Phylum<-  gsub('Bacteroidetes','Bacteroidota',cdf_comb_update_temp_vir$Top_Phylum)
+cdf_comb_update_temp_vir$Top_Phylum  <-  gsub('Actinobacteriota','Actinomycetota',cdf_comb_update_temp_vir$Top_Phylum)
+cdf_comb_update_temp_vir$Top_Phylum <-  gsub('Proteobacteria','Pseudomonadota', cdf_comb_update_temp_vir$Top_Phylum)
+
+#now change the name of Firm to Bacillota etc 
+cdf_comb_update_temp_vir$group <- paste(cdf_comb_update_temp_vir$Top_Phylum, cdf_comb_update_temp_vir$Top_Family, sep = "-")
+
+plot_microshades <- plot_microshades(mdf_comb_update_temp_vir, cdf_comb_update_temp_vir, group_label = "Predicted Phage Host: Phylum-Family") +
+    facet_grid(~ factor(lifestyle, levels = c("Virulent", "Temperate")) + factor(treatment, levels = c("Control", "Colitis")), scales = "free_x") +
+    theme(legend.text = element_text(face = "italic"), legend.key.size = unit(12, "pt")) + 
+    guides(fill = guide_legend(ncol = 1)) + 
+    theme(strip.background = element_blank()) +
+    theme(legend.key = element_blank()) + 
+    theme(strip.text = element_text(size = 14)) + 
+    theme(legend.text = element_text(size = 12)) +
+    theme(axis.text.x = element_text(size = 16),  # Adjust the size of x-axis labels
+          axis.text.y = element_text(size = 16))  # Adjust the size of y-axis labels
+
+plot_microshades
+
+}
+
+microshades_plot3(PS_D3_42, PS_D4_42)
+```
+
+
+
+```{r}
+#Validate Relative Abundance 
+
+
+```
+
+
